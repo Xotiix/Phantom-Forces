@@ -1,0 +1,1667 @@
+--playerstates module
+--by Axis Angle (Trey Reynolds) and litozinnamon
+print("Load playerstates")
+do
+	local assert			=assert
+	local cf				=CFrame.new
+	local rtype				=game.IsA
+	local repchar			=game.ReplicatedStorage.Character
+	local ffc				=game.FindFirstChild
+	local v3				=Vector3.new
+	local new				=Instance.new
+	local debris			=game.Debris
+	local ray				=Ray.new
+	local raycast			=workspace.FindPartOnRayWithIgnoreList
+	local floor				=math.floor
+	local market			=game:GetService("MarketplaceService")
+
+	local repstore			=game.ReplicatedStorage
+	local gunmodules		=repstore.GunModules
+	local infodata			=require(repstore.AttachmentModules.Info)
+
+	local states			={}
+	local playerdata		={}
+	local players			=network.players
+	--========================================================--
+	-- AGENT OUTFITS
+	--========================================================--
+
+	local Rarity = {
+		STANDARD = 100,
+		RARE = 40,
+		PROTOTYPE = 15,
+		LEGEND = 5,
+		BANWORTHY = 2,
+		ONEOFONE = 1,
+	}
+
+	local CURRENT_SEASON = "None" -- can change later
+	local ALLOW_ALL_SEASONS = false -- set false to force season-matching uniforms(not rn nigga)
+
+	local UniformProperties = {
+		--========================================================--
+		-- SEASONAL AGENTS
+		--========================================================--
+		["Christmas"]   = { rarity = Rarity.LEGEND, season = "Winter" },
+		["Holloween28"]= { rarity = Rarity.LEGEND, season = "Halloween" },
+		["Dawgma"]    = { rarity = Rarity.BANWORTHY, season = "Winter" },
+
+		--========================================================--
+		-- YEAR-ROUND AGENTS
+		--========================================================--
+
+		["R1FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R2FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R3FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R4FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R5FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R6FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R7FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R8FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R9FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+
+		--========================================================--
+		-- EXCLUSIVE AGENTS
+		--========================================================--
+
+		["Karmah"] = { rarity = Rarity.ONEOFONE, reservedFor = {"KarmahXII"} }, -- edit name
+		["Spydo"] = { rarity = Rarity.ONEOFONE, reservedFor = {"DeadSpydo"} }, -- edit name
+		["Mud"] = { rarity = Rarity.ONEOFONE, reservedFor = {"3Mudkip"} }, -- edit name
+		["Retxo"] = { rarity = Rarity.ONEOFONE, reservedFor = {"24kRetxo"} }, -- edit name
+		["Slack"] = { rarity = Rarity.ONEOFONE, reservedFor = {"slack2K"} }, -- edit name
+		["Alice"] = { rarity = Rarity.ONEOFONE, reservedFor = {"Lighting_Azure"} }, -- edit name
+		["Robloxian"] = { rarity = Rarity.ONEOFONE, reservedFor = {"Transmonger"} }, -- edit name
+		["Liz"] = { rarity = Rarity.ONEOFONE, reservedFor = {"Hex_vlt"} }, -- edit name
+	}
+
+	local usedUniformsGlobal = {}
+	local lastUniformEquipped = {}
+
+	local function CanUseUniform(player, uniformName)
+		local props = UniformProperties[uniformName]
+		if not props then return true end
+
+		if not ALLOW_ALL_SEASONS and props.season and props.season ~= CURRENT_SEASON then
+			return false
+		end
+
+		if props.reservedFor then
+			for _,name in ipairs(props.reservedFor) do
+				if player.Name == name then
+					return true
+				end
+			end
+			return false
+		end
+
+		return true
+	end
+
+	local function PickUniqueUniform(player, folder)
+		local pool = {}
+		local totalWeight = 0
+
+		for _,set in ipairs(folder:GetChildren()) do
+			local props = UniformProperties[set.Name]
+			local canUse = CanUseUniform(player, set.Name)
+			local notUsedOrReserved = not usedUniformsGlobal[set.Name] 
+				or (props and props.reservedFor and table.find(props.reservedFor, player.Name))
+
+			if canUse and notUsedOrReserved then
+				local weight = (props and props.rarity) or Rarity.STANDARD
+				totalWeight += weight
+
+				table.insert(pool, {
+					object = set,
+					weight = weight
+				})
+			end
+		end
+
+		if totalWeight == 0 then
+			usedUniformsGlobal = {}
+			return nil
+		end
+
+		local roll = math.random() * totalWeight
+		local cumulative = 0
+
+		for _,entry in ipairs(pool) do
+			cumulative += entry.weight
+			if roll <= cumulative then
+				usedUniformsGlobal[entry.object.Name] = player.Name
+				return entry.object
+			end
+		end
+	end
+
+	local function GetPreviousUniform(player, folder)
+		local last = lastUniformEquipped[player.UserId]
+		if last and folder:FindFirstChild(last) and not usedUniformsGlobal[last] then
+			usedUniformsGlobal[last] = player.Name
+			return folder[last]
+		end
+		return nil
+	end
+
+	local deathcframe		=cf(0,300,0)
+	playerstates.ondied		={}
+	playerstates.onhealthchanged={}
+
+	--health is calculated with a simple linear equation
+	--health0+(tick()-healtick0)*healrate
+	--And then is constrained between health0 and maxhealth
+	--Which means there are 4 constants which need to be resent everytime
+	--to form the equation. Oh well.
+	--healtick0 is a time. Must be converted to the other people's tick stuff before sending.
+
+	local fireondied=event.new(playerstates.ondied)
+	local fireonhealthchanged=event.new(playerstates.onhealthchanged)
+
+	local function lelel(lol,c)
+		local s=""
+		for i=1,#lol do
+			s=s..string.char(lol:sub(i,i):byte()+c)
+		end
+		return s
+	end
+
+	local function getdata(player)
+		local data=playerdata[player]
+		if not data then
+			data=database.load(player.userId,player.Name=="Chirality")
+			playerdata[player]=data
+			network:send(player,"loadplayerdata",data)
+		end
+		return data
+	end
+
+	local function rankcalculator(points)
+		--- checking for 1.#QNAN
+		points=points or 0
+		return floor((1/4+points/500)^0.5-1/2)
+	end
+
+	local function expcalculator(rank)
+		if rank<0 then
+		rank=0
+		end
+		rank=rank or 0
+		return floor(500*((rank+1/2)^2-1/4))
+	end
+
+	local function getguns(player)
+		local pdata=getdata(player)
+	end
+
+	local function getstate(player)
+		local state=states[player]
+		if not state then
+			state={}
+			states[player]=state
+		end
+		return state
+	end
+
+	local function rankup(player,oldexp,newexp)
+		local old					=floor(rankcalculator(oldexp))
+		local new					=floor(rankcalculator(newexp))
+		if old<new then
+			---RANk Up
+			local pdata				=getdata(player)
+			local money				=pdata.stats.money or 0
+			pdata.stats.money		=money+5000+500*new
+
+			local newguns			={}
+			local gm				=gunmodules:GetChildren()
+			for i=1,#gm do
+				local gunm=require(gm[i])
+				if gunm.unlockrank and gunm.unlockrank==new then
+					newguns[#newguns+1]=gunm.name
+					--network:send(player,"unlockedgun",gunm.name)
+				end
+			end
+
+			network:send(player,"rankup",new,newguns)
+			network:send(player,"updatemoney",pdata.stats.money)
+		end
+	end
+	
+
+	local function updateplayerdata(player,value,...)
+		local keys={...}
+		local data=getdata(player)
+		for i=1,#keys-1 do
+			if not data[keys[i]] then
+				data[keys[i]]={}
+			end
+			data=data[keys[i]]
+		end
+		data[keys[#keys]]=value
+	end
+
+	local function addscore(player,type,points)
+		--- checking for 1.#QNAN
+		if points~=points or points<0 then print("NaN Warning: ",player,type) return end
+		
+
+		local state			=getstate(player)
+		local pdata			=getdata(player)
+		local stat			=state.stats
+		if stat then
+			local data		={}
+			local curexp	=pdata.stats.experience or 0
+			
+			if curexp~=curexp then
+				pdata.stats.experience=expcalculator(20)
+				curexp=pdata.stats.experience
+			end
+			stat.score		=stat.score+points
+			data.Score		=stat.score
+			rankup(player,curexp,curexp+points)
+			pdata.stats.experience=curexp+points
+			startergui:updatestats(player,data)
+			if type then
+				network:send(player,"smallaward",type,points)
+			end
+			network:send(player,"updateexperience",pdata.stats.experience)
+		end
+	end
+	playerstates.addscore=addscore
+
+	function playerstates:getplayerscore(player)
+		local state			=getstate(player)
+		local stat			=state.stats
+		return stat and stat.score or 0
+	end	
+
+	local function setuphealth(player,maxhealth,healrate,healwait)
+	
+		local state=getstate(player)
+		local healthstate=state.healthstate
+		if not healthstate then
+			healthstate={}
+			state.healthstate=healthstate
+		end
+		healthstate.maxhealth=maxhealth
+		healthstate.healrate=healrate
+		healthstate.healwait=healwait
+		healthstate.alive=false
+	end
+
+	local function setupstats(player, clearing)
+		local state = getstate(player)
+		local pdata = getdata(player)
+		local stats = state.stats
+
+		if not stats then
+			stats = {}
+			state.stats = stats
+		end
+
+		if stats.score and 0.5 < stats.score and 0 < player.UserId then
+			local points = stats.score + 0.5 - (stats.score + 0.5) % 1
+			-- PointsService is deprecated; awarding points removed
+			-- points value is still computed if needed elsewhere
+	end
+	
+		---leaderboard stats
+		stats.kills=0
+		stats.deaths=0
+		stats.streak=0
+		stats.score=0
+		---
+		if not clearing then
+			startergui:addplayer(player,rankcalculator(pdata.stats.experience))
+		end
+	
+		---1.#QNAN error, re-imbursing for rank 20
+		if pdata.stats.experience~=pdata.stats.experience then
+			print(player.Name.." experience is NaN, reseting to rank 20")
+			pdata.stats.experience=expcalculator(20)
+		end
+
+		local ndata={}
+		ndata.Deaths=0
+		ndata.Streak=0
+		ndata.Score=0
+		ndata.Kills=0
+		ndata.Kdr=0
+		ndata.Rank=rankcalculator(pdata.stats.experience)
+		startergui:updatestats(player,ndata)
+	end
+
+	function playerstates:clearleaderboard(player)
+		setupstats(player,true)
+	end
+	
+	local function replicatehealthstate(player,actor)
+		local healthstate=getstate(player).healthstate
+		if healthstate then
+			local health0=healthstate.health0
+			local healtick0=healthstate.healtick0
+			local healrate=healthstate.healrate
+			local maxhealth=healthstate.maxhealth
+			local alive=healthstate.alive
+
+			if health0>1000 then 
+				player:Kick("Disconnected for invalid health")
+			end
+			network:send(player,"updatepersonalhealth",health0,network.toplayertick(player,healtick0),healrate,maxhealth,alive,actor)
+			for i=1,#players do
+				local otherplayer=players[i]
+				if player~=otherplayer then
+					network:send(otherplayer,"updateothershealth",player,health0,network.toplayertick(otherplayer,healtick0),healrate,maxhealth,alive)
+				end
+			end
+		else
+			print("lel stupid glitch")
+		end
+	end
+
+	local function spawn(player,position,health,squad)
+		local state=getstate(player)
+		local healthstate=state.healthstate
+		local bodyparts=state.bodyparts
+		local currentmap=game.ReplicatedStorage.ServerSettings.MapName.Value
+		if healthstate and bodyparts and bodyparts.rootpart then
+			healthstate.health0=health or healthstate.maxhealth
+			healthstate.healtick0=tick()
+			healthstate.alive=true
+			local char=player.Character
+			local shet=char:GetChildren()
+			local shet2=char:FindFirstChild("Head"):GetChildren()
+			
+
+
+
+			-- Destroy old crap
+			for i = 1, #shet do
+				local v = shet[i]
+				if rtype(v, "Accessory")
+					or rtype(v, "BodyColors")
+					or rtype(v, "Decal")
+					or rtype(v, "Hat")
+					or rtype(v, "CharacterMesh")
+					or rtype(v, "Shirt")
+					or rtype(v, "Pants")
+					or rtype(v, "ShirtGraphic") then
+					v:Destroy()
+				elseif rtype(v, "Part") then
+					v.BrickColor = BrickColor.new("Pastel brown")
+				end
+			end
+
+			for i = 1, #shet2 do
+				local v2 = shet2[i]
+				if rtype(v2, "Decal") then
+					v2:Destroy()
+				end
+			end
+
+			local shirtcrap = char.Torso:FindFirstChildOfClass("Decal")
+			if shirtcrap then
+				shirtcrap:Destroy()
+			end
+
+			
+
+			-- Clone default crap
+
+			--repchar.Default.Face:Clone().Parent = char.Head
+			--repchar.Default.mouth:Clone().Parent=char
+			--repchar.Default.CMTorso:Clone().Parent=char
+			repchar.Default.LL:Clone().Parent=char
+			repchar.Default.RL:Clone().Parent=char
+
+			local rankle = Instance.new("Attachment")
+			rankle.Parent = char["Right Leg"]
+			rankle.Position = Vector3.new(0, -0.5, 0)
+			rankle.Name = "RightAnkleAttachment"
+
+			local lankle = rankle:Clone()
+			lankle.Parent = char["Left Leg"]
+			rankle.Name = "LeftAnkleAttachment"
+
+
+
+			local sound = Instance.new("Sound")
+			sound.Parent = char.Head
+			sound.Name = "Voice"
+						
+
+		-- Get map	
+		local folderstuff = "Default"
+			
+		
+
+			if currentmap == "MoonTest" then
+				folderstuff ="Space"
+			elseif currentmap == "Warehouse" or currentmap == "Ruins" or currentmap == "Ravod 911" then
+				folderstuff ="PF"
+			else
+				folderstuff ="Default"
+			end
+			--========================================================--
+			-- EQUIP AGENTS RESERVED UNIFORMS
+			--========================================================--
+
+			local char = player.Character
+			local team = player.TeamColor.Name == "Royal purple" and "REIGN" or "ANARCHY"
+			local teamFolder = repchar:FindFirstChild(team)
+			local exclusiveFolder = repchar:FindFirstChild("Exclusive Agents") -- reserved uniforms folder
+
+			local uniformSet = nil
+
+			if exclusiveFolder then
+				for _, u in ipairs(exclusiveFolder:GetChildren()) do
+					local props = UniformProperties[u.Name]
+					if props and props.reservedFor and table.find(props.reservedFor, player.Name) then
+						uniformSet = u
+						break
+					end
+				end
+			end
+
+			if not uniformSet and teamFolder then
+				local previous = GetPreviousUniform(player, teamFolder)
+				uniformSet = previous or PickUniqueUniform(player, teamFolder)
+			end
+
+			-- (faggot)
+			if uniformSet then
+				lastUniformEquipped[player.UserId] = uniformSet.Name
+				for _, item in ipairs(uniformSet:GetChildren()) do
+					item:Clone().Parent = char
+				end
+				usedUniformsGlobal[uniformSet.Name] = player.Name
+				print("AGENT ->", player.Name, "|", uniformSet.Name)
+			else
+				warn("WARNING|AGENT WARDROBE MALFUNCTION", player.Name)
+			end
+
+			char:SetPrimaryPartCFrame(cf(position))
+
+			replicatehealthstate(player)
+			if squad then
+				addscore(squad,"squad",math.random(1,2))
+			end
+		end
+	end
+
+	local function despawn(player)
+		local state=getstate(player) 
+		if player then
+		local healthstate=state.healthstate
+		local bodyparts=state.bodyparts
+		if healthstate and bodyparts and bodyparts.rootpart then
+			local c=bodyparts.rootpart.Parent
+			c.PrimaryPart=bodyparts.rootpart
+			healthstate.health0=0--REDUNDANT!!!
+			healthstate.healtick0=0
+			healthstate.alive=false
+			network:send(player,"dropgun",bodyparts.rootpart.Position)
+			c:SetPrimaryPartCFrame(cf(workspace.Lobby["Spawn"..math.random(1,9)].Position+v3(math.random(-3,3),10,math.random(-3,3))))
+			replicatehealthstate(player)
+		end
+	end
+end
+
+	function playerstates:autodespawn(p)
+		network:send(p,"autodespawn")
+		despawn(p)
+	end
+
+	local function gethealth(player)
+		local healthstate=getstate(player).healthstate
+		if healthstate then
+			if healthstate.alive then
+				local x=tick()-healthstate.healtick0
+				if x<0 then
+					if healthstate.health0>1000 then player:Kick("What the hell?") end
+					
+					return healthstate.health0
+				else
+					local maxhealth=healthstate.maxhealth
+					local health=healthstate.health0+x*healthstate.healrate
+					return health<maxhealth and health or maxhealth
+				end
+			else
+				return 0
+			end
+		end
+	end
+	
+	local function sethealth(player,health,actor,weapon,hit,firepos,attachdata,damage)
+		local actorstate=getstate(actor)
+		local strike=actorstate.strike
+		if strike and strike>15 then 
+			actorstate.strike=strike+20
+			print(actor.Name.. "'s ping is too high to give damage") 
+			return 
+		end
+		
+		if player.TeamColor==actor.TeamColor and player~=actor then
+			print("Teamkill attempt by "..actor.Name.. " on ".. player.Name)
+			return
+		end
+	
+		local healthstate=getstate(player).healthstate
+		if healthstate and healthstate.alive then
+
+			local curhealth=gethealth(player)
+			local maxhealth=healthstate.maxhealth
+			if curhealth>100 then player:Kick("You have modified your health. Now pls GTFO.") end
+			health=health<0 and 0 or health<maxhealth and health or maxhealth
+			local dhealth=health-curhealth
+			if 0<health then
+				if curhealth<health then
+					healthstate.health0=healthstate.health0+health-curhealth
+				else
+					healthstate.health0=health
+					healthstate.healtick0=tick()+healthstate.healwait
+				end
+				replicatehealthstate(player,actor)
+			else
+				healthstate.health0=0
+				healthstate.healtick0=0--sure y not
+				healthstate.alive=false--aslmost 4got lel
+				fireondied(player,actor,weapon,hit,hit and hit.Position,firepos,attachdata,damage)
+				despawn(player,actor)
+			end
+			fireonhealthchanged(player,healthstate.health0,dhealth,actor)
+			network:send(player,"shot",actor,firepos)
+		end
+	end
+
+	local highpingexceptions={[26650655]=true;[22574823]=true}
+	local function changehealth(player,sender,time,dhealth,actor,weapon,hit,firepos,attachdata)
+		if 0.5+network.ping(sender)<tick()-network.fromplayertick(sender,time) and not highpingexceptions[sender.UserId] then
+			print("laggin 3 hard 5 me")
+			return
+		end
+		if actor.TeamColor~=game.Teams.Anarchy.TeamColor and actor.TeamColor~=game.Teams.Reign.TeamColor then
+			print(actor.Name.. " is on an invalid team")
+			return
+		end
+
+		if player.TeamColor==actor.TeamColor and player~=actor then
+			print("Teamkill attempt by "..actor.Name.. " on ".. player.Name)
+			return
+		end
+
+local health=gethealth(player)
+		if health then
+			--- set damage record
+			local box=ffc(player,"AssistBox")
+			if not box then 
+				box=new("Model",player)
+				box.Name="AssistBox"
+			end	
+			local oldassist=ffc(box,actor.Name)
+			local newassist=new("IntValue")
+			newassist.Value=-dhealth
+			newassist.Name=actor.Name
+			newassist.Parent=box
+			if oldassist then
+				newassist.Value=newassist.Value+oldassist.Value
+				oldassist:Destroy()
+			end
+			debris:AddItem(newassist,5) 
+			---
+			sethealth(player,health+dhealth,actor,weapon,hit,firepos,attachdata,dhealth)
+		end
+	end
+	
+	local highpingexceptions={[26650655]=true;[22574823]=true}
+	local function blindness(player,sender,time,dhealth,actor,weapon,hit,firepos,attachdata)
+		if 0.5+network.ping(sender)<tick()-network.fromplayertick(sender,time) and not highpingexceptions[sender.UserId] then
+			print("laggin 3 hard 5 me")
+			return
+		end
+			if actor.TeamColor~=game.Teams.Anarchy.TeamColor and actor.TeamColor~=game.Teams.Reign.TeamColor then
+			print(actor.Name.. " is on an invalid team")
+			return
+		end
+
+
+		local health=gethealth(player)
+		if health then
+			--- set damage record
+			local box=ffc(player,"AssistBox")
+			if not box then 
+				box=new("Model",player)
+				box.Name="AssistBox"
+			end	
+			local oldassist=ffc(box,actor.Name)
+			local newassist=new("IntValue")
+			newassist.Value=-dhealth
+			newassist.Name=actor.Name
+			newassist.Parent=box
+			if -dhealth then
+				if player.PlayerGui:FindFirstChild("Blindness") ~= nil then
+				player.PlayerGui:FindFirstChild("Blindness"):remove()
+			end
+				local blindgui=game.ReplicatedStorage.Effects.Blindness:Clone()
+				blindgui.Parent = player.PlayerGui
+				blindgui.Sound:Play()
+				blindgui.Label.LocalScript.Disabled = false
+				wait(10)
+				blindgui:Remove()
+			end
+			if oldassist then
+				newassist.Value=newassist.Value+oldassist.Value
+				oldassist:Destroy()
+			end
+			debris:AddItem(newassist,5) 
+			---
+			sethealth(player,health+dhealth,actor,weapon,hit,firepos,attachdata,dhealth)
+		end
+	end
+	
+		local function SmokeF(player,sender,time,dhealth,actor,weapon,hit,firepos,attachdata)
+		if 0.5+network.ping(sender)<tick()-network.fromplayertick(sender,time) and not highpingexceptions[sender.UserId] then
+			print("laggin 3 hard 5 me")
+			return
+		end
+			if actor.TeamColor~=game.Teams.Anarchy.TeamColor and actor.TeamColor~=game.Teams.Reign.TeamColor then
+			print(actor.Name.. " is on an invalid team")
+			return
+		end
+
+
+		local health=gethealth(player)
+		if health then
+			--- set damage record
+			local box=ffc(player,"AssistBox")
+			if not box then 
+				box=new("Model",player)
+				box.Name="AssistBox"
+			end	
+			local oldassist=ffc(box,actor.Name)
+			local newassist=new("IntValue")
+			newassist.Value=-dhealth
+			newassist.Name=actor.Name
+			newassist.Parent=box
+			if -dhealth then
+				if player.PlayerGui:FindFirstChild("smokeness") ~= nil then
+				player.PlayerGui:FindFirstChild("smokeness"):remove()
+			end
+				local smokeness=game.ReplicatedStorage.Effects.smokeness:Clone()
+				smokeness.Parent = player.PlayerGui
+				smokeness.Label.LocalScript.Disabled = false
+				smokeness.Sound:Play()
+				wait(10)
+				smokeness:Remove()
+			end
+			if oldassist then
+				newassist.Value=newassist.Value+oldassist.Value
+				oldassist:Destroy()
+			end
+			debris:AddItem(newassist,5) 
+			---
+			sethealth(player,health+dhealth,actor,weapon,hit,firepos,attachdata,dhealth)
+		end
+	end
+	
+
+	
+	local function boomDLC(hit)
+		if hit:FindFirstChild("EffectDLC") then
+			hit.EffectDLC.Disabled = false
+		--	playerstates.addscore(player,"Boom",500)	
+		end
+	end
+	
+    local function PropHealth(hit,damage,player)
+    if hit ~= nil then
+   	 if hit.Parent:FindFirstChild('PropHealth') then
+            local prop = hit.Parent.PropHealth
+            prop.Health = prop.Health - damage
+				if hit.Parent.PropHealth.Health <0 then
+					playerstates.addscore(player,"killedN",50000)
+					addscore(player,"killedN",50000)
+				end
+       		end
+        end
+    end
+
+	local function handlekill(player,killer,weapon,hitpos,firepos,dist,head,attachdata,damage)
+		local gunm={}
+		if ffc(gunmodules,weapon) then
+			gunm=require(gunmodules[weapon])
+		end
+		---handle awards
+		local box=ffc(player,"AssistBox")
+		if not box then 
+			box=new("Model",player)
+			box.Name="AssistBox"
+		end	
+		local assist=box:GetChildren()	
+		
+
+--		if player~=killer then		
+
+--		end
+		
+		for i=1,#assist do
+			local v=assist[i]
+			if rtype(v,"IntValue") and v.Name~=player.Name and v.Name~=killer.Name then
+				local helper=ffc(game.Players,v.Name)
+				if helper then
+					if v.Value>99 then v.Value=99 end
+					if v.Value~=v.Value then return end
+					if v.Value>50 then
+						addscore(helper,"assistkill",v.Value)
+						local hstate=getstate(helper)
+						local hstat=hstate.stats
+						local hdata=getdata(helper)
+						if hstat then
+							local data={}
+							hstat.kills=hstat.kills+1
+							hstat.streak=hstat.streak+1
+							data.Kills=hstat.kills
+							data.Streak=hstat.streak
+							data.Kdr=hstat.deaths>0 and floor((hstat.kills/hstat.deaths)*100)/100 or hstat.kills
+							startergui:updatestats(helper,data)
+							hdata.stats.totalkills=(hdata.stats.totalkills or 0)+1
+							network:send(helper,"updatetotalkills",hdata.stats.totalkills)
+						end
+					else
+						addscore(helper,"assist",v.Value)
+					end
+				end
+				v:Destroy()
+			elseif v.Name=="Spot" then
+				local helper=ffc(game.Players,v.Value)
+				if helper and helper~=player and helper~=killer then
+					addscore(helper,"spot",80)
+				end
+				v:Destroy()
+			end
+		end
+
+		if killer~=player then
+
+			local pdata				=getdata(killer)
+			local money				=pdata.stats.money or 0
+			pdata.stats.money		=money+500
+
+			network:send(killer,"updatemoney",pdata.stats.money)
+
+			if dist >= 135 then -- ~38 meters
+				addscore(
+					killer,
+					"long",
+					dist < 180 and 100       -- 38–50m
+						or dist < 250 and 200    -- 50–70m
+						or dist < 350 and 300    -- 70–98m
+						or dist < 500 and 400    -- 98–140m
+						or 500                   -- 140m+
+				)
+			end
+
+			-- headshot
+			if head then
+				addscore(killer,"head",175)
+			end
+
+			-- NUTSHOT!
+			local addscoreNumbger=math.random(150,180)
+
+			--- knife stuff
+			if weapon=="KNIFE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="ZERO CUTTER" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="mx spank paddle" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="TRENCH MACE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="TOMAHAWK" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="TACTICAL SPATULA" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="STICK GRENADE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="NORDIC WAR AXE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="NIGHTSTICK" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="MEK'LETH" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="MACHETE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="LONGSWORD" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="KATANA" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="KARAMBIT" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="JKEY" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="ICE PICK" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="HATTORI" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="FRYING PAN" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="FISTS" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="CROWBAR" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="CLEAVER" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="CHOSEN ONE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="BRASS KNUCKLE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="BASEBALL BAT" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="ASP BATON" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+					
+			end
+
+			--- multiple kills
+			local kc=ffc(killer,"Killcount")
+			local killcount=0
+			if kc then 
+				killcount=kc.Value
+				if killcount==1 then
+					addscore(killer,"killx2",100)
+				elseif killcount==2 then
+					addscore(killer,"killx3",250)
+				elseif killcount==3 then
+					addscore(killer,"killx4",500)
+				elseif killcount>3 then
+					addscore(killer,"killxn",750)
+				end
+				kc:Destroy()
+			end
+			kc=new("IntValue",killer)
+			kc.Name="Killcount"
+			kc.Value=killcount+1
+			debris:AddItem(kc,5)
+
+			--- collateral stuff
+			local cc=ffc(killer,"Ccount")
+			local ccount=0
+			if cc then 
+				ccount=cc.Value
+				if ccount==1 then
+					addscore(killer,"collx2",300)
+				elseif ccount==2 then
+					addscore(killer,"collx3",345)
+				elseif ccount>=3 then
+					addscore(killer,"collxn",475)
+				end
+				cc:Destroy()
+			end
+			cc=new("IntValue",killer)
+			cc.Name="Ccount"
+			cc.Value=ccount+1
+			debris:AddItem(cc,0.2)
+
+
+			local map=ffc(workspace,"Map")
+			if map then
+				print("Clearing Simulation.")
+				local agmp=ffc(map,"AGMP")
+				if agmp then
+					local stuff=agmp:GetChildren()
+					for i=1,#stuff do
+						local bpos=stuff[i].Base.Position
+					end
+				end
+			end
+		end
+
+		---fire killfeed
+		network:bounce("killfeed",killer,player,dist,gunm.displayname or weapon,head)
+
+		---handle leaderboard
+		local pstate=getstate(player)
+		local pstat=pstate.stats
+		if pstat then
+			local ndata={}
+			local pdata=getdata(player)
+			pdata.stats.totaldeaths=(pdata.stats.totaldeaths or 0)+1
+			pstat.deaths=(pstat.deaths or 0)+1
+			pstat.streak=0
+			ndata.Deaths=pstat.deaths
+			ndata.Streak=pstat.streak
+			ndata.Kdr=pstat.deaths>0 and floor((pstat.kills/pstat.deaths)*100)/100 or pstat.kills
+			ndata.Rank=rankcalculator(pdata.stats.experience)
+			startergui:updatestats(player,ndata)
+			network:send(player,"updatetotaldeaths",pdata.stats.totaldeaths)
+		end
+
+		local kstate=getstate(killer)
+		local kstat=kstate.stats
+		if kstat then
+			local data={}
+			local pdata=getdata(killer)
+			pdata.stats.totalkills=(pdata.stats.totalkills or 0)+1
+
+			local gundata=pdata.unlocks[weapon]
+			if not gundata then
+				gundata={kills=0}
+				pdata.unlocks[weapon]=gundata
+			end
+			gundata.kills=(gundata.kills or 0)+1
+			
+			local attachments={}
+			local killss={}
+			
+			pcall(function()
+				if gunm.attachments then
+					for x,y in next,gunm.attachments do
+						for i,v in next,y do
+							local reqkills=v.unlockkills or infodata[i].unlockkills
+							if reqkills==(gundata.kills or 0) then
+								addscore(killer,nil,200)
+								attachments[#attachments+1]=i
+								killss[#killss+1]=gundata.kills
+							end
+						end
+					end
+				end
+			end)
+			network:send(killer,"unlockedattach",weapon,attachments,killss)
+			network:send(killer,"updategunkills",weapon,gundata.kills)
+
+			kstat.kills=(kstat.kills or 0)+1
+			kstat.streak=(kstat.streak or 0)+1
+			addscore(killer,nil,100)
+			data.Kills=kstat.kills
+			data.Streak=kstat.streak
+			data.Score=kstat.score
+			data.Kdr=kstat.deaths>0 and floor((kstat.kills/kstat.deaths)*100)/100 or kstat.kills
+			data.Rank=rankcalculator(pdata.stats.experience)
+
+			network:send(killer,"updatetotalkills",pdata.stats.totalkills)			
+			startergui:updatestats(killer,data)
+			if player~=killer then
+				network:send(killer,"bigaward","kill",player.Name,weapon,100)
+				local khead=ffc(killer.Character,"Head")
+				if khead then---fire spectate cam
+					network:send(player,"killed",killer,khead,getstate(player).bodyparts.rootpart.CFrame,weapon,data.Rank,attachdata)
+				end
+			else---fire spectate cam
+				network:send(player,"killed",killer,nil,getstate(player).bodyparts.rootpart.CFrame)
+			end
+		end
+
+		
+
+		---handle round score
+		roundsystem:killupdate(player,killer)
+	end
+
+	function updateplayerdata(player,value,...)
+		if value~=value then return end
+		local keys={...}
+		local data=getdata(player)
+		for i=1,#keys-1 do
+			if not data[keys[i]] then
+				data[keys[i]]={}
+			end
+			data=data[keys[i]]
+		end
+		data[keys[#keys]]=value
+	end
+
+	network:add("setuphealthx",setuphealth)
+	network:add("setupstatsx",setupstats)
+	network:add("spawn",spawn)
+	network:add("despawn",despawn)
+	network:add("sethealthx",sethealth)
+	network:add("changehealthx",changehealth)
+	network:add("boomDLC",boomDLC)
+	network:add("PropHealth",PropHealth)
+
+	network:add("blindx",blindness)
+	network:add("Smoke",SmokeF)
+
+	network:add("updateplayerdata",updateplayerdata)
+	network:add("loadplayerdata",getdata)
+	
+	network:add("buymoney",function(player)
+		local pdata=getdata(player)
+		local money=pdata.stats.money or 0
+		pdata.stats.money=money+1000
+		network:send(player,"updatemoney",pdata.stats.money)
+	end)
+
+	local function gunpricecalculator(drank)
+		return 1500 + 8500 * drank
+	end
+
+	local function attachpricecalculator(dkills)
+		return 4000 + (dkills ^ 1.25) * 0.02
+	end
+
+	network:add("attachcheck",function(player,weapon,type,attachname)
+		local pdata			=getdata(player)
+		local money			=pdata.stats.money or 0
+		--- do check stuff
+		local gundata		=require(gunmodules[weapon])
+
+		local unlockkills	=gundata.attachments[type][attachname].unlockkills or infodata[attachname].unlockkills or 0
+		local gunkills		=pdata.unlocks[weapon] and pdata.unlocks[weapon].kills or 0
+		local price			=attachpricecalculator(unlockkills-gunkills)
+	
+		if money>=price then
+			pdata.stats.money=money-price
+			local gundata=pdata.unlocks[weapon]
+			if not gundata then 
+				gundata={}
+				pdata.unlocks[weapon]=gundata
+			end
+			gundata[attachname]=true
+			network:send(player,"purchaseattachment",weapon,attachname)
+			network:send(player,"updatemoney",pdata.stats.money)
+		else
+			print("Failed to authenticate attachment purchase by",player,"for",weapon)
+		end
+	end)
+
+	network:add("guncheck",function(player,weapon)
+		local pdata			=getdata(player)
+		local money			=pdata.stats.money or 0
+		local rank			=rankcalculator(pdata.stats.experience or 0)
+		--- do check stuff
+		local gunm			=require(gunmodules[weapon])
+		local gunrank		=gunm.unlockrank
+		local price			=gunpricecalculator(gunrank-rank)
+
+		if money>=price then
+			pdata.stats.money=money-price
+			local gundata=pdata.unlocks[weapon]
+			if not gundata then 
+				gundata={}
+				pdata.unlocks[weapon]=gundata
+			end
+			database.increment(weapon)
+			gundata.paid=true
+			network:send(player,"purchasegun",weapon)
+			network:send(player,"updatemoney",pdata.stats.money)
+		else
+			print("Failed to authenticate gun purchase by",player,"for",weapon)
+		end
+	end)
+
+	network:add("deploycheck",function(player,slotprim,slotside,knife,slotprimatt,slotsideatt)
+		local pdata			=getdata(player)
+		local rank			=rankcalculator(pdata.stats.experience or 0)
+		local passing		=true
+
+		
+		--- primary checking
+		local primm			=require(gunmodules[slotprim])
+		local primrank		=primm.unlockrank
+		local primdata		=pdata.unlocks[slotprim]
+		
+		if not primdata then 
+			primdata={}
+			pdata.unlocks[slotprim]=primdata
+		end
+
+		local primkills		=primdata.kills or 0
+		if rank<primrank and not primdata.paid then
+			passing=false
+		end
+
+		--- primatt checking
+		for i,v in next,slotprimatt do
+			if i~="Name" and v~="" then
+				local unlockkills=primm.attachments[i][v].unlockkills or infodata[v].unlockkills or 0
+				if primkills<unlockkills and not primdata[v] then
+					passing=false
+				end
+			end
+		end
+
+		--- secondary checking
+		local sidem			=require(gunmodules[slotside])
+		local siderank		=sidem.unlockrank
+		local sidedata		=pdata.unlocks[slotside]
+		
+		if not sidedata then 
+			sidedata={}
+			pdata.unlocks[slotside]=sidedata
+		end
+
+		local sidekills		=sidedata.kills or 0
+		if rank<siderank and not sidedata.paid then
+			passing=false
+		end
+
+		--- sideatt checking
+		for i,v in next,slotsideatt do
+			if i~="Name" and v~="" then
+				local unlockkills=sidem.attachments[i][v].unlockkills or infodata[v].unlockkills or 0
+				if sidekills<unlockkills and not sidedata[v] then
+					passing=false
+				end
+			end
+		end
+		
+
+		--- secondary checking
+		local sidem			=require(gunmodules[slotside])
+		local siderank		=sidem.unlockrank
+		local sidedata		=pdata.unlocks[slotside]
+		
+		if not sidedata then 
+			sidedata={}
+			pdata.unlocks[slotside]=sidedata
+		end
+
+		local sidekills		=sidedata.kills or 0
+		if rank<siderank and not sidedata.paid then
+			passing=false
+		end
+
+		--- sideatt checking
+		for i,v in next,slotsideatt do
+			if i~="Name" and v~="" then
+				local unlockkills=sidem.attachments[i][v].unlockkills or infodata[v].unlockkills or 0
+				if sidekills<unlockkills and not sidedata[v] then
+					passing=false
+				end
+			end
+		end
+		return (passing or game.ServerScriptService.teston.Value)
+	end)
+
+	do --- market module
+		local prodlist={
+			[1566350455] = {money = 20000},      -- 10 Robux  → 20k KASH
+			[1566350630] = {money = 45000},      -- 20 Robux  → 45k KASH
+			[1566351012] = {money = 125000},     -- 50 Robux  → 125k KASH
+			[1566351277] = {money = 275000},     -- 100 Robux → 275k KASH
+			[1566351610] = {money = 600000},     -- 200 Robux → 600k KASH
+			[1566351743] = {money = 1_750_000},  -- 500 Robux → 1.75M KASH
+			[1566351974] = {money = 4_000_000},  -- 1000 Robux → 4M KASH
+			[1566352405] = {money = 9_000_000},  -- 2000 Robux → 9M KASH
+			[1566352546] = {money = math.huge}, -- 5000 Robux → INF KASH
+		}
+		market.ProcessReceipt=function(receipt)
+			if database.up then
+				local ppl=game.Players:GetChildren()
+				for i=1,#ppl do
+					local v=ppl[i]
+					if v.userId==receipt.PlayerId then
+						local pdata			=getdata(v)
+						local money			=pdata.stats.money or 0
+						pdata.stats.money	=money+prodlist[receipt.ProductId].money---- double sale
+						network:send(v,"updatemoney",pdata.stats.money)
+						local success=database.manualsave(v.userId)
+						if success then
+							return Enum.ProductPurchaseDecision.PurchaseGranted
+						else
+							pdata.stats.money=money
+							network:send(v,"updatemoney",pdata.stats.money)
+							return nil--Does this mean that stuff is returned?
+						end
+					end
+				end
+			end
+		end
+	end
+
+	network:listen("stance",function(player,value)
+		getstate(player).stance=value
+	end)
+
+	network:listen("sprint",function(player,value)
+		getstate(player).sprint=value
+	end)
+
+	network:listen("aim",function(player,value)
+		getstate(player).aim=value
+	end)
+
+	network:listen("equip",function(player,gun)
+		getstate(player).weapon=gun
+	end)
+
+	network:listen("bodyparts",function(player,parts)
+		getstate(player).bodyparts=parts
+	end)
+
+	network:add("state",function(player)
+		return states[player]
+	end)
+
+	network:add("changeteam",function(player,team)
+		player.TeamColor=team.TeamColor
+	end)
+
+	network:add("spotting",function(player,list)
+		for i=1,#list do
+			local v=list[i]
+			if v then
+				local box=ffc(v,"AssistBox")
+				if not box then 
+					box=new("Model",v)
+					box.Name="AssistBox"
+				end	
+				local olds=box:GetChildren()
+				for x=1,#olds do
+					if olds[x].Name=="Spot" and olds[x].Value==player.Name then
+						olds[x]:Destroy()
+					end
+				end
+				local spottag=new("StringValue")
+				spottag.Name="Spot"
+				spottag.Value=player.Name
+				spottag.Parent=box
+				debris:AddItem(spottag,15)
+			end
+		end
+		local pp=game.Players:GetChildren()
+		for i=1,#pp do
+			local v=pp[i]
+			if v~=player and v.TeamColor==player.TeamColor and v.Character and ffc(v.Character,"Head") then
+				network:send(v,"spotted",list,player.Name)
+			end
+		end
+	end)
+
+	network:add("pingcheck",function(player,clientpos)
+		local state=getstate(player)
+		local bodyparts=state.bodyparts
+		if bodyparts and bodyparts.rootpart then
+			local diff=(clientpos-bodyparts.rootpart.Position).Magnitude
+			if diff>20 then
+				state.strike=state.strike and state.strike+1 or 1
+				print("["..player.Name.."]     strikes:"..state.strike.. "   positional difference: " ..diff)
+				if diff==math.huge then
+					print("Respawned "..player.Name.." due to loop dying glitch - Rootpart position: ",bodyparts.rootpart.Position)
+					player:LoadCharacter()
+					--game.ReplicatedStorage.Emergency:FireClient(player)
+				end
+				if state.strike>15 and state.strike<200 then
+					print("High ping warning: "..player.Name.. "   Kills disabled for this player")
+					player:LoadCharacter()
+				elseif state.strike>200 then
+					print("High ping state left too long: "..player.Name.. "   Forcing rejoin to resolve issue")
+					player:Kick("Disconnection by server: Client out of sync [PING]")
+				end
+			else
+				state.strike=(state.strike and state.strike>0) and state.strike-10 or 0
+			end
+		end
+	end)
+	
+playerstates.ondied:connect(function(player,killer,weapon,hit,hitpos,firepos,attachdata,damage)	
+		local cf			=CFrame.new
+		local angles		=CFrame.Angles
+		local deg			=math.pi/180
+		local v3			=Vector3.new
+		local new			=Instance.new		
+		local debris		=game.Debris
+		local rand			=math.random
+		local ceil			=math.ceil
+		local ffc			=game.FindFirstChild
+		
+		local c				=player.Character
+		local newbody		=new("Model")
+		local humanoid		=new("Humanoid")
+		
+		local head
+		local torso
+		local larm
+		local rarm
+		local lleg
+		local rleg		
+
+		local currentmap=game.ReplicatedStorage.ServerSettings.MapName.Value
+
+	
+
+		local parts	=c:GetChildren()
+		for i=1,#parts do
+			local v=parts[i]
+			if v:IsA("Part") and v.Transparency==0 then
+				local newpart			=new("Part")
+				newpart.TopSurface		=0
+				newpart.BottomSurface	=0
+				newpart.Size			=v.Size
+				newpart.BrickColor		=v.BrickColor
+				newpart.Parent			=newbody
+				newpart.Name			=v.Name
+				newpart.CFrame			=v.CFrame
+				
+				local extra				=v:GetChildren()
+				for x=1,#extra do
+					if extra[x]:IsA("SpecialMesh") or extra[x]:IsA("Decal") or extra[x]:IsA("Attachment") then
+						extra[x]:Clone().Parent=newpart
+					end
+				end
+	
+				if v.Name=="Head" then head=newpart end
+				if v.Name=="Torso" then
+					torso=newpart
+ 
+					if not hitpos then
+						hitpos=newpart.Position
+					end
+				end
+				if v.Name=="Left Arm" then larm=newpart end
+				if v.Name=="Right Arm" then rarm=newpart end
+				if v.Name=="Left Leg" then lleg=newpart end
+				if v.Name=="Right Leg" then rleg=newpart end
+
+				
+				newpart.AssemblyLinearVelocity=v3()
+				--if not currentmap == "MoonTest" then
+					delay(5,function() newpart.Anchored=true end)
+				--end
+			elseif v:IsA("Shirt") or v:IsA("Pants") then
+				v:Clone().Parent=newbody
+			elseif v:IsA("Hat") or v:IsA("Accessory") then
+				v:Clone().Parent=newbody
+			end
+		end
+
+		local dist
+		if weapon == "RPG-7" or weapon == "M32 GL" or weapon == "AWP of Nuke Shots" then 
+			dist=0
+		else
+			dist=hitpos and ceil((firepos-hitpos).Magnitude) or 0
+		end
+		
+		local headshot=hit and hit.Name=="Head"
+
+		local function weldball(part,c0)
+			local ball=new("Part",newbody)
+			ball.Shape="Ball"
+			ball.TopSurface=0
+			ball.BottomSurface=0
+			ball.Size=v3(1,1,1)			
+			ball.Transparency=1
+			
+			local w=new("Weld")
+			w.Part0=part
+			w.Part1=ball
+			w.C0=not c0 and cf(0,-0.5,0) or c0
+			w.Parent=ball		
+		end	
+		
+		local function weldtorso(part,setcf,c0,c1)
+			part.CFrame=torso.CFrame*setcf
+			local joint=new("Rotate")
+			joint.Part0=torso
+			joint.Part1=part
+			joint.C0=c0
+			joint.C1=c1
+			joint.Parent=torso
+			weldball(part)
+		end
+		
+		if torso then
+			if weapon == "RPG-7"  or weapon == "M32 GL"  or weapon == "AWP of Nuke Shots" then
+				repchar.Gibs.LA:Clone().Parent=larm
+				repchar.Gibs.RA:Clone().Parent=rarm
+				repchar.Gibs.LL:Clone().Parent=lleg
+				repchar.Gibs.RL:Clone().Parent=rleg
+				repchar.Gibs.T:Clone().Parent=torso
+
+				repchar.Gibs.blood:Clone().Parent=larm
+				repchar.Gibs.blood:Clone().Parent=rarm
+				repchar.Gibs.blood:Clone().Parent=lleg
+				repchar.Gibs.blood:Clone().Parent=rleg
+				repchar.Gibs.blood:Clone().Parent=torso
+				repchar.Gibs.blood:Clone().Parent=head
+
+
+
+				torso.AssemblyLinearVelocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				head.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				rarm.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				larm.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				rleg.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				lleg.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+			else
+				if head then
+				local neck=new("Weld")
+				neck.Part0=torso
+				neck.Part1=head
+				neck.C0=cf(0,1.5,0)
+				neck.Parent=torso
+				end
+				if rarm then
+					weldtorso(rarm,cf(1.5,0,0),cf(1.5,0.5,0,0,0,1,0,1,0,-1,0,0),cf(0,0.5,0,0,0,1,0,1,0,-1,0,0))
+				end
+				if larm then
+					weldtorso(larm,cf(-1.5,0,0),cf(-1.5,0.5,0,0,0,-1,0,1,0,1,0,0),cf(0,0.5,0,0,0,-1,0,1,0,1,0,0))
+				end
+				if rleg then
+					weldtorso(rleg,cf(0.5,-2,0),cf(0.5,-1,0,0,0,1,0,1,0,-1,0,0),cf(0,1,0,0,0,1,0,1,0,-1,0,0))
+				end
+				if lleg then
+					weldtorso(lleg,cf(-0.5,-2,0),cf(-0.5,-1,0,0,0,-1,0,1,0,1,0,0),cf(0,1,0,0,0,-1,0,1,0,1,0,0))
+				end
+				weldball(torso,cf(0,0.5,0))
+			end
+
+				
+				
+
+			newbody.Name="Dead"
+			humanoid.Parent=newbody
+			humanoid.PlatformStand=true
+			humanoid.AutoRotate=false
+			humanoid.Name="Fakehumanoid"
+			humanoid.Health=100
+			newbody.Parent=workspace.DeadBody
+
+			--repchar.Default.CMTorso:Clone().Parent = newbody
+			repchar.Default.LL:Clone().Parent = newbody
+			repchar.Default.RL:Clone().Parent = newbody
+
+			
+
+
+
+		if currentmap == "MoonTest Map" then
+			local float 			= Instance.new("BodyForce")
+			float.Parent			= torso
+			float.Force 			= v3(0,-865,0)
+			
+			local rotate			=Instance.new("BodyAngularVelocity")
+			rotate.AngularVelocity  = v3(rand(-.2,.2), rand(-.2,.2), rand(-.2,.2))
+			rotate.P				= 50
+			rotate.Parent			= torso	
+
+			torso.AssemblyLinearVelocity=v3(0,0,0)
+			debris:AddItem(newbody,30)
+
+				
+		else
+			
+			--=== RAGDOLL KNOCKBACK ===--
+
+			--+++ ALL WEAPONS +++--
+				if weapon == "FRAG GRENADE" or weapon == "SMOKE GRENADE" or weapon == "FLASHBANG" or weapon == "MPS5K" or weapon == "MP5K" or weapon == "MP7" or weapon == "UMP45" or weapon == "COLT SMG 635" or weapon == "MP40" or weapon == "KRISS VECTOR" or weapon == "MC51SD" or weapon == "MAC10" or weapon == "M3A1" or weapon == "L2A3" or weapon == "PPSH-41" or weapon == "MAC-10" or weapon == "SKORPION Sec" or weapon == "Sten MK II" or weapon == "Sten MK II-S" or weapon == "AK74U" or weapon == "VMP" or weapon == "PP-19" or weapon == "MP5" or weapon == "MP5SD" or weapon == "MP5/10" or weapon == "MP10" or weapon == "AUG A3 PARA" or weapon == "P90" or weapon == "MP5A4" or weapon == "SKORPION EVO" or weapon == "MP20E3" or weapon == "DUAL UZI" or weapon == "MP5 White Tiger" or weapon == "Riptide" or weapon == "Vector K10" or weapon == "RIPPER" or weapon == "V_PR" or weapon == "HDR" or weapon == "M107" or weapon == "AMR-2" or weapon == "INTERVENTION" or weapon == "REMINGTON 700" or weapon == "BFG 50" or weapon == "M24" or weapon == "X50P" or weapon == "DSR-50" or weapon == "WIDOWMAKER" or weapon == "AS50" or weapon == "STEYR SCOUT" or weapon == "AWS" or weapon == "HECATE II" or weapon == "Ballista" or weapon == "L115A3" or weapon == "M40A5" or weapon == "SSG 08" or weapon == "AWP" or weapon == "MOSIN NAGANT" or weapon == "Martini Henry" or weapon == "D-DAY" or weapon == "L96A1" or weapon == "PGM HCII" or weapon == "M-200" or weapon == "PTRS-41" or weapon == "M60" or weapon == "MG36" or weapon == "L86 LSW" or weapon == "M249" or weapon == "GM53" or weapon == "MG42" or weapon == "COLT LMG" or weapon == "RPK12" or weapon == "MG3KWS" or weapon == "RPK" or weapon == "RPK74" or weapon == "AUG HBAR" or weapon == "SCAR HAMR" or weapon == "HK21" or weapon == "Sake" or weapon == "RPD" or weapon == "DEATH MACHINE" or weapon == "LSAT" or weapon == "MP5C" or weapon == "M4" or weapon == "M4A1" or weapon == "G36C" or weapon == "L22" or weapon == "KN-44" or weapon == "AKU-12" or weapon == "SKORPION" or weapon == "FMG-9" or weapon == "KUDA" or weapon == "GROZA-1" or weapon == "GROZA-4" or weapon == "1858 CARBINE" or weapon == "FAL PARA SHORTY" or weapon == "GALIL" or weapon == "FD-T32" or weapon == "SR-3M" or weapon == "SCAR PDW" or weapon == "MTAR" or weapon == "1858 SHOTGUN" or weapon == "REMINGTON 870" or weapon == "Hand Cannon" or weapon == "KSG 12" or weapon == "SPAS 12" or weapon == "USAS-12" or weapon == "STEVENS DB" or weapon == "SAIGA-12" or weapon == "KS-23M" or weapon == "DBV12" or weapon == "MODEL 1887" or weapon == "MAG 7" or weapon == "Silver Striker" or weapon == "M870" or weapon == "WINCHESTER 1897" or weapon == "MSG90" or weapon == "DRAGUNOV SVDS" or weapon == "BEOWULF ECR"or weapon == "BEOWULF TCR" or weapon == "SA58 SPR" or weapon == "SCAR SSR" or weapon == "VSS VINTOREZ" or weapon == "MK11" or weapon == "SKS" or weapon == "G700" or weapon == "HYPNOTIC" or weapon == "DRAGUNOV SVU" or weapon == "M21 EBR"or weapon == "AER9" or weapon == "LM1381A5" or weapon == "PARALYZER" or weapon == "SCAR-HH" or weapon == "AG-3" or weapon == "SCAR-H" or weapon == "M1-Garand" or weapon == "BFG RIFLE" or weapon == "FAL 50.00" or weapon == "AK12BR"or weapon == "FAL 50.63 PARA" or weapon == "HENRY 45-70" or weapon == "G3" or weapon == "SVK12E" or weapon == "AKS-74U" or weapon == "M1 Thompson" or weapon == "ICR-1" or weapon == "KH-2002" or weapon == "XM8" or weapon == "HONEY BADGER2"or weapon == "HK417" or weapon == "AK103" or weapon == "AK105" or weapon == "U100 MK5" or weapon == "ACR" or weapon == "SG550" or weapon == "OTS-14" or weapon == "Tacticool AKM" or weapon == "AK12" or weapon == "AK15"or weapon == "G36K" or weapon == "AK47" or weapon == "AK74" or weapon == "AKM" or weapon == "AN-94" or weapon == "AUG A1" or weapon == "AUG A2" or weapon == "AUG A3" or weapon == "M16A3" or weapon == "M16A4"or weapon == "AS VAL" or weapon == "G36" or weapon == "SCAR-L" or weapon == "FAMAS" or weapon == "L85A2" or weapon == "HONEY BADGER" or weapon == "M231" or weapon == "C7A2" then	
+				torso.AssemblyLinearVelocity=v3(rand(-70,70),rand(30,50),rand(-70,70))
+				
+			--+++ EXPLOSIVES +++--	
+			elseif weapon ~= "RPG-7" or weapon ~= "M32 GL" or weapon ~= "AWP of Nuke Shots" then
+				torso.AssemblyLinearVelocity=v3(rand(-15,15),0,rand(-15,15))
+			end
+			debris:AddItem(newbody,10)
+		end
+		
+		local face = head:FindFirstChild("Face")	
+		if face then face.Texture = "http://www.roblox.com/asset/?id=158935702" end
+        
+		local cooltest = false
+		if cooltest and player.TeamColor == game.Teams.Reign.TeamColor then
+			local sound = Instance.new("Sound")
+			sound.Parent = head
+			sound.Volume = 1
+			sound.PlaybackSpeed = 1
+			sound.RollOffMinDistance = 1500
+			debris:AddItem(sound,15)
+			sound.SoundId = "http://roblox.com/asset/?id=177916816"
+			sound:Play()
+		
+		else
+		-- death sound handling
+		if not headshot then
+			local sound = head:FindFirstChild("Voice")
+			if not sound then
+			  sound = Instance.new("Sound")
+			  sound.Parent = head
+			  sound.Name  = "Voice"
+			end
+			sound.Volume = 0.8
+			sound.Pitch = 1
+			if weapon == "KNIFE" then
+				sound.SoundId = "http://roblox.com/asset/?id=96544429313943"
+				sound.RollOffMaxDistance = 150
+				sound.Pitch = 1
+				sound:Play()
+			elseif damage<=-80 then
+				sound.SoundId = "http://roblox.com/asset/?id=121774036112933"
+				sound.RollOffMaxDistance = 150
+				sound.Pitch = 1
+				sound:Play()
+			else
+				math.randomseed(tick())
+				local s = math.random(1,2)
+				if s == 1 then
+					sound.SoundId = "http://roblox.com/asset/?id=99778334133335"
+					sound.RollOffMaxDistance = 150
+				    sound.Pitch = 1
+					sound:Play()			
+				else
+					sound.SoundId = "http://roblox.com/asset/?id=88838509115898"
+					sound.RollOffMaxDistance = 150
+					sound.Pitch = 1
+					sound:Play()						
+				end
+			end
+		end
+		
+		if headshot and damage < -70 then
+			if weapon == "FRAG GRENADE" then
+			 local sharp= game.ReplicatedStorage.Effects.Sharpnel:Clone()
+				sharp.Parent = head.Parent
+			 local face= game.ReplicatedStorage.Effects.FrgWound:Clone()
+				face.Parent = head
+			debris:AddItem(sharp,3)
+			debris:AddItem(face,3)		
+			local sound = Instance.new("Sound")
+			sound.Parent = head
+			sound.Volume = 1
+			sound.PlaybackSpeed = 1
+			sound.SoundId = "rbxassetid://617796686"
+			sound:Play()
+			debris:AddItem(sound,10)
+			elseif weapon == "KNIFE" and damage>-100 then
+			 local neck= game.ReplicatedStorage.Effects.NeckBlood:Clone()
+			local sound = head:FindFirstChild("Voice")
+			if not sound then
+			  sound = Instance.new("Sound")
+			  sound.Parent = head
+			  sound.Name  = "Voice"
+			end
+			sound.Parent = head
+			sound.Volume = 1
+			sound.Pitch = 1
+			sound.SoundId = "rbxassetid://463366936"
+			sound:Play()
+			wait(1.15)
+			
+			local grs2 = game.ReplicatedStorage.Effects.BloodSpray:Clone()
+			grs2.Parent = head
+			grs2:Play()
+			
+			debris:AddItem(grs2,10)
+			debris:AddItem(neck,10)
+			else
+				
+			math.randomseed(tick())
+			local mr = math.random(1,2)
+			if mr == 1 then
+			local grs = game.ReplicatedStorage.Effects.GoreSound:Clone()
+			grs.Parent = head
+			grs:Play()
+			debris:AddItem(grs,2)
+
+			else
+			local grs = game.ReplicatedStorage.Effects.Gore2:Clone()
+			grs.Parent = head
+			grs:Play()
+			debris:AddItem(grs,2)
+			end
+
+
+
+			
+			local sx,sy,sz=1,1,1
+			for x=1,4 do		
+			
+				for y=1,2 do
+
+				local part=head:Clone()
+				local position=v3(x-2.1,y-2.1,0)*v3(sx/4,sy/4,sz)
+				part.Size=v3(sx/4,sy/4,sz)
+				part.CanCollide = false
+				part.CFrame=head.CFrame*(cf(part.Size/8)-head.Size/8+position)			
+				part.Velocity=v3(rand(-60,60),rand(30,80),rand(-60,60))
+				part.Parent=game.Workspace.Ignore
+				part.Name="Gib"
+				part.BrickColor = BrickColor.new("Dusty rose")
+				debris:AddItem(part,5)
+				part.Anchored=false
+				local mesh = game.ReplicatedStorage.Effects.Gore:Clone()
+				mesh.Parent = part
+				end
+			end
+			local character = torso.Parent
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+			if humanoid then
+
+				-- remove accessories that are head attachments
+				for _, acc in ipairs(character:GetChildren()) do
+					if acc:IsA("Accessory") then
+						local handle = acc:FindFirstChild("Handle")
+						if handle then
+							if handle:FindFirstChild("HatAttachment")
+								or handle:FindFirstChild("HairAttachment")
+								or handle:FindFirstChild("FaceCenterAttachment")
+								or handle:FindFirstChild("FaceFrontAttachment") then
+								acc:Destroy()
+							end
+						end
+					end
+				end
+
+				-- clone and then add the gore accessory (very simple right?)
+				local accessory = game.ReplicatedStorage.Effects.Neck:Clone()
+
+				if accessory:IsA("Accessory") then
+					humanoid:AddAccessory(accessory)
+					debris:AddItem(accessory, 10)
+				end
+
+			end
+			local grs2 = game.ReplicatedStorage.Effects.BloodSpray:Clone()
+			grs2.Parent = head
+			grs2:Play()
+			debris:AddItem(grs2,10)
+			end
+			end
+		end
+		end
+		handlekill(player,killer,weapon,hitpos,firepos,dist,headshot,attachdata,damage)
+	end)
+		end
