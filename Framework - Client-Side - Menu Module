@@ -132,7 +132,10 @@ do
 	local mainloadout			=wfc(menugui,"MainLoadout")
 	local mainmenu				=wfc(menugui,"MainMenu")
 	local mainoption			=wfc(menugui,"MainOption")
-
+	local operators				=wfc(menugui,"Operators")
+	local sacstage              = wfc(lobby,"SACStage")
+	local previewfit            = wfc(sacstage,"PREVIEWFIT")
+	
 	local source				=wfc(menugui,"Source")
 	local intermission			=wfc(mainmenu,"Intermission")
 
@@ -154,10 +157,11 @@ do
 	local mapimg				=wfc(stage,"MapImg")
 
 	local s={
-		deploy					=wfc(loadbar,"Deploy"),
-		loadout					=wfc(selection,"Loadout"),
-		menu					=wfc(selection,"Menu"),
-		option					=wfc(selection,"Option"),
+		deploy = wfc(loadbar,"Deploy"),
+		loadout = wfc(selection,"Loadout"),
+		menu = wfc(selection,"Menu"),
+		option = wfc(selection,"Option"),
+		operators = wfc(selection,"Operators")
 	}
 
 	gunclass={
@@ -450,7 +454,12 @@ do
 		end
 	end
 
-	local slist={menu=mainmenu,option=mainoption,loadout=mainloadout}
+	local slist={
+		menu = mainmenu,
+		option = mainoption,
+		loadout = mainloadout,
+		operators = operators
+	}
 	local function mainswitch(type)
 		for i,v in next,slist do
 			v.Visible=false
@@ -1939,6 +1948,10 @@ do
 	s.menu.MouseButton1Click:connect(function()
 		mainswitch("menu") 
 		camera:setmenucam(lobby)
+	end)
+	s.operators.MouseButton1Click:connect(function()
+		mainswitch("operators")
+		camera:setsaccam(lobby)
 	end)
 	s.option.MouseButton1Click:connect(function() mainswitch("option") end)
 
