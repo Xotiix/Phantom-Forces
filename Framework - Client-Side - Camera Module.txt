@@ -198,11 +198,16 @@ do
 		camera.menufov = 60
 		camera.type = "sacmenu"
 
-		curlsac = lobby
-		sacpart = lobby.SACStage.CamPos
-		sacfocus = lobby.SACStage.Focus
+		local stage = lobby:WaitForChild("SACStage")
 
-		camera:transitionToMenu(sacpart, sacfocus)
+		sacpart = stage:WaitForChild("CamPos")
+		sacfocus = stage:WaitForChild("Focus")
+
+		if sacpart and sacfocus then
+			camera:transitionToMenu(sacpart, sacfocus)
+		else
+			warn("SACStage camera setup failed")
+		end
 	end
 
 	function camera:setfirstpersoncam()
@@ -334,8 +339,13 @@ do
 					focusPos = lobbyfocuss.Position
 
 				elseif camera.type == "sacmenu" then
-					camPos = sacpart.Position
-					focusPos = sacfocus.Position
+					if sacpart and sacfocus then
+						camPos = sacpart.Position
+						focusPos = sacfocus.Position
+					else
+						warn("SACStage camera parts missing")
+						return
+					end
 				end
 			end
 
