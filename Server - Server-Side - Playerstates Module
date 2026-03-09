@@ -451,13 +451,37 @@ do
 			--========================================================--
 			-- EQUIP AGENTS RESERVED UNIFORMS
 			--========================================================--
+			--------------------------------------------------
+			-- OPERATOR SELECTION
+			--------------------------------------------------
 
+			local selectedOperator = chosenoperators[player]
 			local char = player.Character
 			local team = player.TeamColor.Name == "Royal purple" and "REIGN" or "ANARCHY"
 			local teamFolder = repchar:FindFirstChild(team)
 			local exclusiveFolder = repchar:FindFirstChild("Exclusive Agents") -- reserved uniforms folder
 
 			local uniformSet = nil
+
+			--------------------------------------------------
+			-- OPERATOR OVERRIDE
+			--------------------------------------------------
+
+			if selectedOperator then
+
+				local operatorFolder = repchar:FindFirstChild("Operators")
+
+				if operatorFolder then
+
+					local operatorSet = operatorFolder:FindFirstChild(selectedOperator)
+
+					if operatorSet then
+						uniformSet = operatorSet
+					end
+
+				end
+
+			end
 
 			-- 1️⃣ Check Exclusive Agents first (reserved uniforms)
 			if exclusiveFolder then
