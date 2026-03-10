@@ -140,6 +140,36 @@ do
 	local modelfolder			=wfc(GunStage,"GunModel")
 	local menugui				=wfc(pgui,"Menu")
 
+	--------------------------------------------------
+	-- OPERATOR PREVIEW FUNCTION
+	--------------------------------------------------
+	local function updateOperatorPreview(operatorName)
+		-- Lobby and SACStage references
+		local lobby = menugui:WaitForChild("Lobby")
+		local sacStage = lobby:WaitForChild("SACStage")
+		local preview = sacStage:WaitForChild("PREVIEWFIT")
+
+		-- Clear previous outfit
+		for _, child in ipairs(preview:GetChildren()) do
+			if child:IsA("Accessory") or child:IsA("Model") or child:IsA("Part") then
+				child:Destroy()
+			end
+		end
+
+		-- Get the uniform model from ReplicatedStorage
+		local uniformFolder = game.ReplicatedStorage.Character:FindFirstChild(operatorName)
+		if not uniformFolder then
+			warn("Operator uniform not found:", operatorName)
+			return
+		end
+
+		-- Clone uniform into preview
+		for _, item in ipairs(uniformFolder:GetChildren()) do
+			local clone = item:Clone()
+			clone.Parent = preview
+		end
+	end
+
 	if input.consoleon then
 		menugui:Destroy()
 		menugui=repstore.XBOX.Menu:Clone()
@@ -1968,8 +1998,9 @@ do
 		camera:setmenucam(lobby)
 	end)
 	s.operators.MouseButton1Click:connect(function()
-		mainswitch("operators")
-		camera:setsaccam(lobby)
+		-- When opening the Operator menu
+		mainswitch("Operators") -- show Operators frame
+		camera:setsaccam(menugui.Lobby) -- move camera to SACStage
 	end)
 	s.option.MouseButton1Click:connect(function() mainswitch("option") end)
 
@@ -1994,32 +2025,32 @@ do
 		menu:refreshspawn()
 		if not menu:isdeployed() then
 			input.mouse:show()---temporary
-			local ReplicatedStorage = game:GetService("ReplicatedStorage")
-			local SetOperator = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("SetOperator")
+			--------------------------------------------------
+			-- OPERATOR BUTTONS
+			--------------------------------------------------
+			local operatorsFrame = menugui:WaitForChild("Operators")
+			local SetOperator = game.ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("SetOperator")
 
-			local player = game.Players.LocalPlayer
-			local playerGui = player:WaitForChild("PlayerGui")
-			local menuGui = playerGui:WaitForChild("Menu")
-			local operatorsFrame = menuGui:WaitForChild("Operators")
-
-			local misc = ReplicatedStorage:WaitForChild("Miscs")   -- must match your hierarchy
-			local lobby = misc:WaitForChild("Lobby")      -- used for SACStage
+			local selectedFrame = nil
 
 			for _, frame in pairs(operatorsFrame:GetChildren()) do
 				local button = frame:FindFirstChild("Select")
 				if button then
 					button.MouseButton1Click:Connect(function()
 						local operatorName = frame.Name
-						print("Selected Operator:", operatorName)
 
-						-- Send operator choice to server
+						-- Update the preview model
+						updateOperatorPreview(operatorName)
+
+						-- Send selection to server
 						SetOperator:FireServer(operatorName)
 
-						-- Move camera to SACStage for preview
-						camera:setsaccam(lobby)
-
-						-- Optional: highlight selection visually
-						frame.BackgroundColor3 = Color3.fromRGB(70,70,70)
+						-- Highlight the selected operator
+						if selectedFrame then
+							selectedFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+						end
+						frame.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+						selectedFrame = frame
 					end)
 				end
 			end
