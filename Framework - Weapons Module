@@ -1,0 +1,2776 @@
+	--WEAPONS MODULE LEL
+
+	--Add dynamic animation shit
+	--Inspection
+	--Spotting
+	local equipping	=false
+	local zooming	=false
+	local rweld
+	local lweld
+	local larm
+	local rarm
+	local lmodel
+	local rmodel
+	local lmain
+	local rmain
+	local sin		=math.sin
+	local cos		=math.cos
+
+	char.grenadehold=false	
+	local function gunbob(a,r)
+		local a,r=a or 1,r or 1
+		local d,s,v=char.distance*6.28318*3/4,char.speed,-char.velocity
+		local w=v3(r*sin(d/4-1)/256+r*(sin(d/64)-r*v.z/4)/512,r*cos(d/128)/128-r*cos(d/8)/256,r*sin(d/8)/128+r*v.x/1024)*s/20*6.28318
+		return cf(r*cos(d/8-1)*s/196,1.25*a*sin(d/4)*s/512,0)*cframe.fromaxisangle(w)
+	end
+
+	local function gunsway(a)
+		local d,s=tick()*6,2*(1.2-a)
+		return cf(cos(d/8)*s/128,-sin(d/4)*s/128,sin(d/16)*s/64)
+	end
+
+	local function weldattachment(gun,type,attname,menunode,mainpart)
+		local refmodel=ffc(attmodels,attname)
+		if refmodel then
+			local model=refmodel:Clone()			
+
+			local attnode=model.Node
+			local weldcframes={}
+			local maincf=attnode.CFrame
+			local parts=getchildren(model)
+
+			for i=1,#parts do
+				local v=parts[i]
+				if v:IsA("BasePart")then
+					weldcframes[v]=tos(maincf,v.CFrame)
+				end
+			end
+			attnode.CFrame=menunode.CFrame
+			if type=="Optics" then
+				local del=gun:GetChildren()
+				for i=1,#del do
+					if del[i].Name=="Iron" or del[i].Name=="IronGlow" or (del[i].Name=="SightMark" and not ffc(del[i],"Stay")) then
+						del[i]:Destroy()
+					end
+				end
+			end
+			if type=="Underbarrel" then
+				local dels=gun:GetChildren()
+				for i=1,#dels do
+					if dels[i].Name=="Grip" or dels[i].Name=="grip" then
+						dels[i]:Destroy()
+					end
+				end
+			end
+			for i=1,#parts do
+				local v=parts[i]
+				if v:IsA("BasePart")then
+					if v~=attnode then
+						local c0=tos(mainpart.CFrame,attnode.CFrame)
+						local weld=new("Weld",mainpart)
+						weld.Part0=mainpart
+						weld.Part1=v
+						weld.C0=c0*weldcframes[v]
+					end
+					v.Anchored=false
+					v.CanCollide=false
+					v.Parent=gun
+				end
+			end
+			attnode:Destroy()
+			model:Destroy()
+		end
+	end
+
+	local tos=CFrame.new().toObjectSpace
+	local function weldmodel(model,mainpart,attachlist,data)
+		local welddata={}
+		local parts=model:GetChildren()
+		local maincf=mainpart.CFrame
+		local menunodes=ffc(model,"MenuNodes")
+		for i=1,#parts do
+			local part=parts[i]
+			if part~=mainpart and part:IsA("BasePart") then
+				local name=part.Name
+				local c0=tos(maincf,part.CFrame)
+				local weld=new("Weld",mainpart)
+				weld.Part0=mainpart
+				weld.Part1=part
+				weld.C0=c0
+				welddata[name]={
+					part=part;
+					weld=weld;
+					basec0=c0;
+					basetransparency=part.Transparency;
+				}
+				part.Anchored=false
+				part.CanCollide=false
+			end
+		end
+		for i = 1, #parts do
+			local part = parts[i]
+			if part ~= mainpart and part:IsA("BasePart") then
+				local name = part.Name
+				if data and data.weldexception and data.weldexception[name] and ffc(model, data.weldexception[name]) then
+					local nbase = model[data.weldexception[name]]
+					local nmaincf = nbase.CFrame
+					local c0 = tos(nmaincf, part.CFrame)
+					local weld = new("Weld", mainpart)
+					weld.Part0 = nbase
+					weld.Part1 = part
+					weld.C0 = c0
+					welddata[name] = {
+						part = part,
+						weld = weld,
+						basec0 = c0,
+						basetransparency = part.Transparency
+					}
+				else
+					local c0 = tos(maincf, part.CFrame)
+					local weld = new("Weld", mainpart)
+					weld.Part0 = mainpart
+					weld.Part1 = part
+					weld.C0 = c0
+					welddata[name] = {
+						part = part,
+						weld = weld,
+						basec0 = c0,
+						basetransparency = part.Transparency
+					}
+				end
+				part.Anchored = false
+				part.CanCollide = false
+			end
+		end
+		if menunodes and #menunodes:GetChildren() > 1 then
+			local nodes = menunodes:GetChildren()
+			for i = 1, #nodes do
+				local v = nodes[i]
+				local c0 = tos(maincf, v.CFrame)
+				local weld = new("Weld", mainpart)
+				weld.Part0 = mainpart
+				weld.Part1 = v
+				weld.C0 = c0
+				v.Anchored = false
+				v.CanCollide = false
+			end
+			for i,v in next,attachlist do
+				if i ~= "Name" and v and v ~= "" then
+					local attachdata = data.attachments and data.attachments[i][v] or {}
+					local sidemount = attachdata.sidemount and attmodels[attachdata.sidemount]:Clone()
+					local mountweldpart = attachdata.mountweldpart and model[attachdata.mountweldpart] or mainpart
+					local node = attachdata.node and menunodes[attachdata.node]
+
+					if sidemount then
+						local basenode			=sidemount["Node"]
+						local mountnode			=attachdata.mountnode and menunodes[attachdata.mountnode] or i=="Optics" and menunodes["MountNode"] or i=="Underbarrel" and menunodes["UnderMountNode"]
+						local mountcframes		={}
+						local mchildren			=sidemount:GetChildren()
+						local basecframe		=basenode.CFrame
+						for i=1,#mchildren do
+							if mchildren[i]:IsA("BasePart") then
+								mountcframes[i]=tos(basecframe,mchildren[i].CFrame)
+							end
+						end
+						basenode.CFrame=mountnode.CFrame
+						for x=1,#mchildren do
+							local p=mchildren[x]
+							if p:IsA("BasePart")then
+								local c0=tos(mountweldpart.CFrame,basenode.CFrame)
+								if p~=basenode then
+									local weld=new("Weld",mainpart)
+									weld.Part0=mountweldpart
+									weld.Part1=p
+									weld.C0=c0*mountcframes[x]
+									p.CFrame=basenode.CFrame*mountcframes[x]
+								end
+								p.Anchored=false
+								p.CanCollide=false
+								p.Parent=model
+								if p.Name==i.."Node" and not node then
+									node=p
+								elseif p.Name=="SightMark" then
+									local stay=new("Model",p)
+									stay.Name="Stay"
+								end
+							end
+						end
+						basenode.Parent=menunodes
+						sidemount:Destroy()
+					else
+						node=attachdata.node and menunodes[attachdata.node] or menunodes[i.."Node"]
+					end
+					local weldpart=attachdata.weldpart and model[attachdata.weldpart] or mainpart
+					weldattachment(model,i,v,node,weldpart)
+				end
+			end
+			menunodes:Destroy()
+		end
+		mainpart.Anchored=false
+		mainpart.CanCollide=false
+		return welddata
+	end
+
+	local clone			=game.Clone
+	local currentcamera	=game.Workspace.CurrentCamera
+	local ffc			=game.FindFirstChild
+
+	function char:loadarms(newlarm,newrarm,newlmain,newrmain)
+		currentcamera=game.Workspace.CurrentCamera
+		larm,rarm,lmain,rmain=newlarm,newrarm,newlmain,newrmain
+		lmodel=clone(larm,weapon and currentcamera)
+		rmodel=clone(rarm,weapon and currentcamera)
+		local lmainpart=lmodel[newlmain]
+		local rmainpart=rmodel[newrmain]
+		rweld=new("Motor6D")
+		lweld=new("Motor6D")
+		weldmodel(lmodel,lmainpart)
+		weldmodel(rmodel,rmainpart)
+		lweld.Part0=rootpart
+		lweld.Part1=lmainpart
+		lweld.Parent=lmainpart
+		rweld.Part0=rootpart
+		rweld.Part1=rmainpart
+		rweld.Parent=rmainpart
+	end
+
+	function char:reloadsprings()
+		-- Recreate springs
+		sprintspring     = physics.spring.new()
+		aimspring        = physics.spring.new()
+		swingspring      = physics.spring.new(nv)
+		speedspring      = physics.spring.new()
+		velocityspring   = physics.spring.new(nv)
+		pronespring      = physics.spring.new(0)
+		truespeedspring  = physics.spring.new(0)
+		equipspring      = physics.spring.new(1)
+		muzzlespring     = physics.spring.new(0)
+
+		-- Equip (weighty but responsive)
+		equipspring.s    = 9
+		equipspring.d    = 1.0
+
+		-- Sprint / Aim (firm, no bounce)
+		sprintspring.s   = 10
+		sprintspring.d   = 1.05
+		aimspring.d      = 1.1
+
+		-- Body / camera swing (Marathon feel)
+		swingspring.s    = 12
+		swingspring.d    = 1.0
+
+		-- Movement inertia
+		speedspring.s    = 12
+		speedspring.d    = 1.0
+
+		velocityspring.s = 12
+		velocityspring.d = 1.05
+
+		pronespring.s    = 6
+		pronespring.d    = 1.1
+
+		truespeedspring.s = 6
+		truespeedspring.d = 1.1
+
+		-- Muzzle: stiff + dead (no wobble)
+		muzzlespring.s   = 45
+		muzzlespring.d   = 1.25
+
+		-- Walkspeed & head height
+		walkspeedspring  = physics.spring.new(basewalkspeed)
+		walkspeedspring.s = 7
+		walkspeedspring.d = 1.0
+
+		headheightspring = physics.spring.new(1.5)
+		headheightspring.s = 7
+		headheightspring.d = 1.0 
+
+		if muzzlelight then
+			muzzlelight:Destroy()
+		end
+		muzzlelight				=repstore.Effects.MuzzleLight:Clone()
+		muzzlelight.Parent		=rootpart
+
+	end
+
+	--BULLSHIT BULLSHIT
+	local aimbotshit={}
+
+	do
+		local function reweld(welddata)
+			for i,v in next,welddata do
+				if v.clone then
+					welddata[i]=nil
+					trash.remove(v.weld)
+					trash.remove(v.part)
+				else
+					v.weld.C0=v.basec0
+					if v.part then
+						v.part.Transparency=v.basetransparency
+					end
+				end
+			end
+		end
+
+		local rand=math.random
+		local ffc=game.FindFirstChild
+		local function pickv3(v0,v1)
+			return v0+v3(rand(),rand(),rand())*(v1-v0)
+		end
+
+		function char:firemuzzlelight()
+			muzzlespring:accelerate(100)
+		end
+
+		function char:loadgrenade(data,model,spare)
+			local self				={}
+			--network:bounce("load",player,data.name)
+			local thread2			=sequencer.new()
+			local ignorelist		=ignore
+			local dunhit			={}
+			--General things I guess.
+			local main				=data.mainpart
+			local mainoffset		=data.mainoffset
+			local mainpart			=model[main]
+			local pin				=model[data.pin]
+			local lever				=model[data.lever]
+			local ammog				=data.ammog
+
+			local lastweapon		=weapon
+			local equipped			=false
+			local throwing			=false
+			local cooking			=false
+			local exploded			=false
+
+			local bounceelasticity	=0.2
+			local acceleration		=v3(0,-80,0)
+			local velocity			=v3()
+			local position			=v3()
+
+			local cooktime			=0
+			local blowup			=0
+			local t0				=0
+			local lastbounce		=false
+			local lasttrailt		=0
+			local lasttrailpos		=v3()		
+			local rot0
+			local offset			=v3()
+			local av0				
+			local flyingnade
+			local indicator
+
+			--grenade explode stuff
+			local fusetime			=data.fusetime
+			local blastradius		=data.blastradius
+			local throwspeed		=data.throwspeed
+			local r0,r1,d0,d1		=data.range0,data.range1,data.damage0,data.damage1
+
+			--Static animation data stuff
+			local animdata			=weldmodel(model,mainpart)
+			local mainweld			=new("Motor6D",mainpart)
+			animdata[main]			={weld={C0=nc},basec0=nc}
+			animdata.larm			={weld={C0=data.larmoffset},basec0=data.larmoffset}
+			animdata.rarm			={weld={C0=data.rarmoffset},basec0=data.rarmoffset}
+
+			mainweld.Part0			=rootpart
+			mainweld.Part1			=mainpart
+
+			--Dynamic animation stuff OMG prepare for flood
+			local equipcf			=data.equipoffset
+			local sprintcf			=cframe.interpolator(data.sprintoffset)
+			local pronecf			=cframe.interpolator(data.proneoffset)
+
+			self.type				=data.type
+			self.cooking			=cooking
+
+			function self:setequipped(on)
+				if on and (not equipped or not equipping) then
+					if char.health<=0 then return end
+					aimbotshit.speed=throwspeed
+					aimbotshit.accel=acceleration
+					aimbotshit.addv=true
+					char.grenadehold=true
+					hud:setcrosssettings(data.crosssize,data.crossspeed,data.crossdamper,main)
+					hud:updatefiremode("KNIFE")
+					hud:updateammo("GRENADE")
+					equipping=true
+					thread:clear()
+					if weapon then
+						lastweapon=weapon
+						weapon:setequipped(false)
+					end
+					thread:add(function()
+						char:setbasewalkspeed(data.walkspeed)
+						equipspring.t=0
+						equipping=false
+						equipped=true
+						local shit=mainpart:GetChildren()
+						for i=1,#shit do
+							if shit[i]:IsA("Weld") and (not shit[i].Part1 or shit[i].Part1.Parent~=model) then
+								shit[i]:Destroy()
+							end
+						end
+						lmodel.Parent=currentcamera
+						rmodel.Parent=currentcamera
+						model.Parent=currentcamera
+						weapon=self
+						--reweld(animdata)
+						--if sprinting then char:setsprint(false) end
+					end)
+				elseif not on and equipped then
+					--Set equipped to false here?
+					equipspring.t=1
+					thread:clear()--I don't think this should be here.
+					thread:add(function()
+						equipped=false
+						lmodel.Parent=nil
+						rmodel.Parent=nil
+						model.Parent=nil
+						animating=false
+						weapon=nil
+					end)
+					thread:delay(0.5)--arb
+				end
+			end
+
+			local function createnade()
+				---need to add network cloning fake nade
+				if roundsystem.lock or not mainpart.Parent or gamelogic.gammo<=0 then return end
+				gamelogic.gammo=gamelogic.gammo-1
+				hud:updateammo("GRENADE")
+				local time=tick()
+				trash.remove(mainweld)
+				flyingnade=mainpart
+				flyingnade.Parent=workspace.Ignore
+				flyingnade.Anchored=true
+				indicator=ffc(flyingnade,"Indicator")
+				if indicator then
+					indicator.Friendly.Visible=true
+				end
+				model.Parent=nil
+				velocity=char.health>0 and camera.lookvector*throwspeed+rootpart.Velocity or v3()
+				position=char.deadcf and char.deadcf.p or flyingnade.CFrame.p				
+
+				lasttrailt=time
+				lasttrailpos=position	
+				t0=time
+				av0=(camera.cframe-camera.cframe.p)*v3(19.539,-5.0,0)
+				rot0=flyingnade.CFrame-flyingnade.CFrame.p
+
+				network:bounce("newgrenade",player,data.name,position,velocity,acceleration,bounceelasticity,t0,av0,rot0,blowup-tick())
+
+			end
+
+			function self:throw(dpos)
+				---do grenade stuff
+				if roundsystem.lock or gamelogic.gammo<= 0 then return end
+				if cooking and not throwing then
+					local time=tick()
+					throwing=true
+					cooking=false
+					self.cooking=cooking
+					exploded=false					
+					sprintspring.t=0
+					thread:add(animation.player(animdata,data.animations.throw))
+					thread2:delay(0.07)
+					thread2:add(function() 
+						createnade(dpos)
+						if sprinting then sprintspring.t=1 end
+						throwing=false
+					end)
+					thread:add(function()
+						if lastweapon then
+							lastweapon:setequipped(true)
+						end
+					end)
+				end
+			end
+
+			function self:pull()
+				local time=tick()
+				if not cooking and not throwing then
+					if animating then
+						thread:add(animation.reset(animdata,0.1))
+						animating=false
+					end
+					thread:add(animation.player(animdata,data.animations.pull))
+					thread:add(function()
+						hud.crossspring:accelerate(data.crossexpansion)
+						trash.remove(pin)
+						cooking=true
+						self.cooking=cooking
+						cooktime=time+fusetime
+						blowup=time+5
+					end)
+				end
+			end
+
+			local function hitdetection(hit,dist) --- frag damage
+				---damage code
+				if hit.Parent and ffc(game.Players,hit.Parent.Name) and not dunhit[hit.Parent] and ffc(game.Players,hit.Parent.Name) then 
+					local p=game.Players:GetPlayerFromCharacter(hit.Parent)
+					if p.TeamColor~=player.TeamColor or p==player then
+						local wall,pos=raycast(workspace,ray(hit.Position,(hit.Position-position).unit*-dist),ignorelist)
+						if not wall then
+							effects:bloodhit(position,hit,hit.Position,hit.CFrame.lookVector)
+							local damage=dist<r0 and d0 or dist<r1 and (d1-d0)/(r1-r0)*(dist-r0)+d0 or d1
+							--print("damage : " ..damage.. "  dist : " ..dist.. "   wall : ",wall)
+							network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',p,player,tick(),-damage,player,data.name,hit,position)
+							hud:changehealthlocally(player,-damage)
+							dunhit[hit.Parent]=true
+							hud:firehitmarker(hit.Name)
+						end
+					end
+
+
+				elseif hit.Name == "HitBoxBoom" then
+					local damage=data.damage1
+
+					local prop = hit.Parent.PropHealth 
+					prop.Health = prop.Health - damage
+					dunhit[hit.Parent]=true
+					hud:firehitmarker()
+					if prop.Health <= 0 then
+						network:send('b'..'o'..'o'..'m'..'D'..'L'..'C',hit)
+					end
+				elseif hit.Name == "HitBoxNPC" then
+					local damage=data.damage1
+
+					local prop = hit.Parent.PropHealth 
+
+					dunhit[hit.Parent]=true
+					hud:firehitmarker()
+					if prop.Health <= 0 then
+						network:send('P'..'r'..'o'..'p'..'H'..'e'..'a'..'l'..'t'..'h',hit,damage,player)
+					end
+				end
+			end
+
+			local function blindplayer(hit,dist) --searchg 
+				---damage code
+				if hit.Parent and ffc(game.Players,hit.Parent.Name) and not dunhit[hit.Parent] and ffc(game.Players,hit.Parent.Name) then 
+					local p=game.Players:GetPlayerFromCharacter(hit.Parent)
+					if p.TeamColor~=player.TeamColor or p==player then
+						local wall,pos=raycast(workspace,ray(hit.Position,(hit.Position-position).unit*-dist),ignorelist)
+						if not wall then
+							effects:bloodhit(position,hit,hit.Position,hit.CFrame.lookVector)
+							local damage=dist<r0 and d0 or dist<r1 and (d1-d0)/(r1-r0)*(dist-r0)+d0 or d1
+							--print("damage : " ..damage.. "  dist : " ..dist.. "   wall : ",wall)
+							--[==[antihack]==]network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',p,player,tick(),-damage,player,data.name,hit,position)
+							hud:changehealthlocally(player,-damage)
+							hud:firehitmarker()
+							--[==[antihack]==]network:send('b'..'l'..'i'..'n'..'d'..'x',p,player,tick(),-damage,player,data.name,hit,position)
+							hud:blindness(player,-damage)
+							--network:send("changehealth",p,-damage,player,data.name,hit,position)
+							dunhit[hit.Parent]=true
+						end
+					end
+				end
+			end
+
+
+			local function Smokeplayer(hit,dist) --searchg 
+				---damage code
+				if hit.Parent and ffc(game.Players,hit.Parent.Name) and not dunhit[hit.Parent] and ffc(game.Players,hit.Parent.Name) then 
+					local p=game.Players:GetPlayerFromCharacter(hit.Parent)
+					local wall,pos=raycast(workspace,ray(hit.Position,(hit.Position-position).unit*-dist),ignorelist)
+					if not wall then
+						effects:bloodhit(position,hit,hit.Position,hit.CFrame.lookVector)
+						local damage=dist<r0 and d0 or dist<r1 and (d1-d0)/(r1-r0)*(dist-r0)+d0 or d1
+						network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',p,player,tick(),-damage,player,data.name,hit,position)
+						hud:changehealthlocally(player,-damage)
+						hud:firehitmarker()
+						network:send('S'..'m'..'o'..'k'..'e',p,player,tick(),-damage,player,data.name,hit,position)
+						hud:blindness(player,-damage)
+						hud:smokeness(player,-damage)
+						dunhit[hit.Parent]=true
+					end
+				end 
+			end
+			local soundIds = {
+				"rbxassetid://73312990704484",
+				"rbxassetid://81242113312355",
+				"rbxassetid://139696252382849",
+				"rbxassetid://100527447760381",
+				"rbxassetid://71111149785696",
+				"rbxassetid://76585008207184",
+				"rbxassetid://138090301156261",
+				"rbxassetid://82397136380026",
+				"rbxassetid://127594489776558"
+			}
+
+			local shuffleBag = {}
+			local lastPlayed = nil
+
+			local function reshuffle()
+				shuffleBag = {}
+
+				for i = 1, #soundIds do
+					table.insert(shuffleBag, soundIds[i])
+				end
+
+				-- Fisher-Yates shuffle
+				for i = #shuffleBag, 2, -1 do
+					local j = math.random(1, i)
+					shuffleBag[i], shuffleBag[j] = shuffleBag[j], shuffleBag[i]
+				end
+
+				-- 🔥 prevent same sound at cycle boundary
+				if lastPlayed and shuffleBag[1] == lastPlayed then
+					local swapIndex = math.random(2, #shuffleBag)
+					shuffleBag[1], shuffleBag[swapIndex] = shuffleBag[swapIndex], shuffleBag[1]
+				end
+			end
+			local function explode()
+				if ffc(flyingnade,"Fire") then
+					local sound = flyingnade.Fire
+
+					local sp = Instance.new("Part", workspace.Ignore)
+					sp.CanCollide = false
+					sp.Anchored = true
+					sp.Size = game.ReplicatedStorage.Effects.FlashPart.Size
+					sp.Transparency = 1
+					sp.Position = position + Vector3.new(0,-2,0)
+
+					sound.Parent = sp
+
+					-- sound settings
+					sound.RollOffMode = Enum.RollOffMode.InverseTapered
+					sound.RollOffMinDistance = 10
+					sound.RollOffMaxDistance = 180
+					sound.Volume = 10
+
+					-- refill if empty
+					if #shuffleBag == 0 then
+						reshuffle()
+					end
+
+					local nextSound = table.remove(shuffleBag, 1)
+					lastPlayed = nextSound
+
+					sound.SoundId = nextSound
+
+					-- pitch variation
+					sound.PlaybackSpeed = math.random(98,102) / 100
+
+					sound:Play()
+				end
+				exploded=true
+				trash.remove(flyingnade)
+				dunhit={}
+				if data.grenadetype=="Frag" then
+					---need to add network stuff later
+					local boom=new("Explosion",workspace)
+					boom.Position=position
+					boom.BlastRadius=blastradius
+					boom.BlastPressure=0
+					boom.DestroyJointRadiusPercent=0
+					boom.Hit:connect(function(hit,dist)
+						hitdetection(hit,dist)
+					end)
+				elseif data.grenadetype=="Smoke" then
+					local boom=game.ReplicatedStorage.Effects.SmokePart:Clone()
+					boom.Parent = workspace
+					boom.Position=position
+					local ex=new("Explosion", workspace)
+					ex.Visible = false
+					ex.Position=position
+					ex.BlastRadius=15
+					ex.BlastPressure=0
+					ex.DestroyJointRadiusPercent=0
+					local exss=new("Explosion", workspace)
+					exss.Visible = false
+					exss.Position=position
+					exss.BlastRadius=15
+					exss.BlastPressure=0
+					exss.DestroyJointRadiusPercent=0
+					local exs=new("Explosion", workspace)
+					exs.Visible = false
+					exs.Position=position
+					exs.BlastRadius=15
+					exs.BlastPressure=0
+					exs.DestroyJointRadiusPercent=0
+					ex.Hit:connect(function(hit,dist)
+						Smokeplayer(hit,dist)
+					end)
+					exss.Hit:connect(function(hit,dist)
+						Smokeplayer(hit,dist)
+					end)
+					exss.Hit:connect(function(hit,dist)
+						Smokeplayer(hit,dist)
+					end)
+					wait(data.time)
+					ex:remove()
+					exss:remove()
+					exs:remove()
+					boom.Smoke.Opacity = 0.9
+					wait(0.1)
+					boom.Smoke.Opacity = 0.8
+					wait(0.1)
+					boom.Smoke.Opacity = 0.7
+					wait(0.1)
+					boom.Smoke.Opacity = 0.6
+					wait(0.1)
+					boom.Smoke.Opacity = 0.5
+					wait(0.1)
+					boom.Smoke.Opacity = 0.4
+					wait(0.1)
+					boom.Smoke.Opacity = 0.3
+					wait(0.1)
+					boom.Smoke.Opacity = 0.2
+					wait(0.1)
+					boom.Smoke.Opacity = 0.1
+					wait(0.1)
+					boom:Remove()
+					--- smoke
+				elseif data.grenadetype=="Flash" then
+					local boom=game.ReplicatedStorage.Effects:FindFirstChild("FlashPart"):clone()
+					local ex=new("Explosion", workspace)
+					ex.Visible = false
+					ex.Position=position
+					ex.BlastRadius=blastradius
+					ex.BlastPressure=0
+					ex.DestroyJointRadiusPercent=0
+					boom.Parent = workspace.Ignore
+					boom.Position=position
+					ex.Hit:connect(function(hit,dist)
+						blindplayer(hit,dist)
+						boom:remove()
+						wait(10)
+						ex:remove()
+					end)
+				elseif data.grenadetype=="Flare" then
+					--- signal
+				elseif data.grenadetype=="Throwing" then
+					--- flying knives wat
+				end
+			end
+
+
+
+			run.onstep:connect(function(dt)
+				thread2.step()
+				local time=tick()
+
+				--cooking stuff
+				if cooking and not throwing then
+					if cooktime<time or not input.keyboard.down["g"] then
+						self:throw()
+					elseif (cooktime-time)%1<0.03 then
+						hud.crossspring:accelerate(data.crossexpansion)
+					end
+				end				
+
+				--grenade throwing physics
+				if flyingnade and not exploded then
+					if time<blowup then
+						local newvelocity=velocity+dt*acceleration
+						local newposition=position+dt*velocity
+						local hit,pos,norm=raycast(workspace,ray(position,newposition-position),ignorelist)
+						local check,_,_=raycast(workspace,ray(position,camera.cframe.p-position),ignorelist)
+						local t=tick()-t0
+
+						if indicator then
+							indicator.Enabled=not check
+						end
+
+						if hit and hit.Name~="Window" then
+							rot0=flyingnade.CFrame-flyingnade.CFrame.p
+							offset=0.2*norm
+							t0=tick()
+							av0=norm:Cross(velocity)/0.2
+							position=pos+norm*0.001
+							local normvel=dot(norm,velocity)*norm
+							local tanvel=velocity-normvel
+							local friction
+							if lastbounce then
+								friction=1-0.08*acceleration.magnitude*dt/tanvel.magnitude
+							else
+								friction=1-0.08*(acceleration.magnitude+(1+bounceelasticity)*normvel.magnitude)/tanvel.magnitude
+							end
+							velocity=tanvel*(friction<0 and 0 or friction)-bounceelasticity*normvel
+							lastbounce=true
+						else
+							position=newposition
+							velocity=newvelocity
+							lastbounce=false
+							if hit and hit.Name=="Window" then
+								effects:breakwindow(hit,pos,norm,true)
+							end
+						end
+						-- TRAIL
+						local dist = (lasttrailpos - position).Magnitude
+
+						if lasttrailt + 0.035 < time and dist > 0.25 then
+
+							local trail = new("Part")
+							trail.Parent = workspace.Ignore
+							trail.Anchored = true
+							trail.CanCollide = false
+							trail.Transparency = 1
+							trail.Size = v3(0.2,0.2,0.2)
+
+							trail.CFrame = cf((lasttrailpos + position) * 0.5, position)
+
+							local mesh = new("BlockMesh")
+							mesh.Parent = trail
+							mesh.Scale = v3(
+								0.35,
+								0.35,
+								dist * 3
+							)
+
+							debris:AddItem(trail, 0.25)
+
+							lasttrailpos = position
+							lasttrailt = time
+						end
+						flyingnade.CFrame=cf(position+offset)*cframe.fromaxisangle(t*av0)*rot0
+					else
+						explode()
+					end
+				end
+
+			end)
+
+			function self.step()
+				--Animate grenade arms
+				local mainweldc0=rootpart.CFrame:inverse()
+					*camera.shakecframe
+					*mainoffset*animdata[main].weld.C0
+					--*breathing()
+					*pronecf(pronespring.p)
+					--*cf(-velocityspring.v/8192)
+					*cf(0,0,1)*cframe.fromaxisangle(swingspring.v)*cf(0,0,-1)
+					*gunbob(0.7,1)
+					*gunsway(0)
+					*cframe.interpolate(sprintcf(truespeedspring.p/walkspeedspring.p*sprintspring.p),data.equipoffset,equipspring.p)
+				mainweld.C0=mainweldc0
+				--Animate arms
+				lweld.C0=mainweldc0*animdata.larm.weld.C0
+				rweld.C0=mainweldc0*animdata.rarm.weld.C0
+				if char.health<=0 then
+					self:setequipped(false)
+				end
+			end
+
+			return self
+		end		
+		function char:loadknife(data,model)
+			local self={}
+			self.type				=data.type
+			--network:bounce("load",player,data.name)
+			local thread2			=sequencer.new()--LOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOL
+			local ignorelist		={camera.currentcamera,character,workspace.Ignore}
+			local dunhit			={}
+			--General things I guess.
+			local main				=data.mainpart
+			local mainoffset		=data.mainoffset
+			local mainpart			=model[main]
+			local tip				=model[data.tip]
+			local equipped			=false
+			local knifing			=false
+			local nexthit			=0
+
+			--stab stuff
+			local stabrate			=1000
+			local r0,r1,d0,d1		=data.range0,data.range1,data.damage0,data.damage1
+			local knifepart = mainpart:Clone()
+			knifepart.Parent = model
+			knifepart.Name = "Handle"
+			local animdata = {}
+			do
+				local knifecf = knifepart.CFrame
+				local kparts = model:GetChildren()
+				for i = 1, #kparts do
+					local part = kparts[i]
+					if part:IsA("BasePart") then
+						if part ~= knifepart and part ~= mainpart then
+							local c0 = tos(knifecf, part.CFrame)
+							local weld = new("Weld", knifepart)
+							weld.Part0 = knifepart
+							weld.Part1 = part
+							weld.C0 = c0
+							animdata[part.Name] = {
+								part = part,
+								weld = weld,
+								basec0 = c0,
+								basetransparency = part.Transparency
+							}
+						end
+						part.Anchored = false
+						part.CanCollide = false
+					end
+				end
+			end
+			local knifeweld = new("Motor6D", knifepart)
+			knifeweld.Part0 = rmodel.Arm
+			knifeweld.Part1 = knifepart
+			local mainweld = new("Motor6D", mainpart)
+			animdata[main] = {
+				weld = {C0 = nc},
+				basec0 = nc
+			}
+			animdata.larm = {
+				weld = {
+					C0 = data.larmoffset
+				},
+				basec0 = data.larmoffset
+			}
+			animdata.rarm = {
+				weld = {
+					C0 = data.rarmoffset
+				},
+				basec0 = data.rarmoffset
+			}
+			animdata.knife = {
+				weld = {
+					C0 = data.knifeoffset
+				},
+				basec0 = data.knifeoffset
+			}
+			mainweld.Part0 = rootpart
+			mainweld.Part1 = mainpart
+			local equipcf = data.equipoffset
+			local sprintcf = cframe.interpolator(data.sprintoffset)
+			local pronecf = cframe.interpolator(data.proneoffset)
+			local inspecting
+			function self:destroy()
+				model:Destroy()
+			end
+			function self:setequipped(on, quick, dead)
+				if dead then
+					model:Destroy()
+				end
+				if on and (not equipped or not equipping) then
+					if char.health <= 0 then
+						return
+					end
+					network:bounce("e" .. "q" .. "u" .. "i" .. "p" .. "k" .. "n" .. "i" .. "f" .. "e", player, data.name)
+					hud:setcrosssettings(data.crosssize, data.crossspeed, data.crossdamper, main)
+					hud:updatefiremode("KNIFE")
+					hud:updateammo("KNIFE")
+					equipping = true
+					inspecting = false
+					thread:clear()
+					if weapon then
+						weapon:setequipped(false)
+					end
+					thread:add(function()
+						char:setbasewalkspeed(data.walkspeed)
+						sprintspring.s = data.sprintspeed
+						hud:setcrosssize(data.crosssize)
+						if model then
+							pcall(function()
+								lmodel.Parent = currentcamera
+								rmodel.Parent = currentcamera
+								model.Parent = currentcamera
+							end)
+						end
+						equipspring.s = quick and 32 or 16
+						equipspring.t = 0
+						equipped = true
+						weapon = self
+						equipping = false
+						knifing = false
+						char.grenadehold = false
+						if sprinting then
+							sprintspring.t = 1
+						end
+						stabrate = quick and 2000 or 1000
+					end)
+					if quick then
+						thread:delay(0.05)
+						thread:add(function()
+							self:shoot(quick)
+						end)
+					end
+				elseif not on and equipped then
+					knifing = false
+					inspecting = false
+					equipspring.t = 1
+					thread:add(animation.reset(animdata, 0.1))
+					thread:add(function()
+						equipped = false
+						model.Parent = nil
+						if model:FindFirstChild("Sound") then
+							model.Sound:Destroy()
+						end
+						lmodel.Parent = nil
+						rmodel.Parent = nil
+						animating = false
+						weapon = nil
+					end)
+				end
+			end
+
+			function self:playanimation(type)---knife
+				if not knifing and not equipping then
+					thread:clear()
+					if animating then
+						thread:add(animation.reset(animdata,0.05))
+					end
+
+					animating=true
+					sprintspring.t=0
+					local acceptlist={}
+					if type=="inspect" then
+						inspecting=true
+					elseif type=="spot" then
+						local pp=game.Players:GetChildren()
+						for i=1,#pp do
+							local v=pp[i]
+							if v.TeamColor~=player.TeamColor and v.Character then
+								local head=ffc(v.Character,"Head")
+								if head and hud:getplayervisible(v) then
+									local v1=(head.Position-camera.cframe.p).unit
+									local v2=camera.lookvector
+									if v1:Dot(v2)>0.975 then
+										acceptlist[#acceptlist+1]=v
+										hud:firespot(v)
+									end
+								end
+							end
+						end
+					end
+
+					thread:add(animation.player(animdata,data.animations[type]))
+					thread:add(function()
+						thread:add(animation.reset(animdata,data.animations[type].resettime))
+						animating=false
+						thread:add(function() 
+							if sprinting then sprintspring.t=1 end 
+							inspecting=false
+						end)
+						if #acceptlist>0 then
+							--[==[antihack]==]network:send('s'..'p'..'o'..'t'..'t'..'i'..'n'..'g',player,acceptlist)
+							--network:send("spotting",player,acceptlist)
+						end
+					end)
+					return #acceptlist>0
+				end
+			end
+
+			function self:reloadcancel(inspect)
+				if inspect then
+					thread:clear()
+					thread:add(animation.reset(animdata,0.2))
+					reloading=false
+					animating=false
+					thread:add(function() 
+						if input.mouse.down["right"] then 
+							return
+						end 
+						if sprinting then sprintspring.t=1 end 
+					end)	
+				end
+			end
+
+			function self:shoot(quick,type)
+				---do knife stuff
+				if roundsystem.lock then return end
+				if inspecting then self:reloadcancel(true) inspecting=false end
+				if not knifing then
+					local time=tick()
+					network:bounce("stab",player)
+					nexthit=nexthit>time and nexthit or time
+					sprintspring.t=0
+					knifing=true
+					if animating then
+						thread:add(animation.reset(animdata,0.1))
+						animating=false
+					end
+					type=type or "stab1"
+					sound.play(data.soundClassification, 0.25)
+					thread:add(animation.player(animdata,data.animations[type]))
+					thread:add(function()
+						thread:add(animation.reset(animdata,data.animations[type].resettime))
+						if sprinting then sprintspring.t=1 end
+						knifing=false
+						dunhit={}
+					end)
+
+				end
+			end
+
+			local function hitdetection(hit,pos,norm) 
+				---damage code
+				if ffc(game.Players,hit.Parent.Name) and ffc(hit.Parent,"Torso") and not dunhit[hit.Parent] and ffc(game.Players,hit.Parent.Name) then 
+					local p=game.Players:GetPlayerFromCharacter(hit.Parent)
+					if p.TeamColor~=player.TeamColor then
+						effects:bloodhit(rootpart.Position,hit,pos,norm)	
+						local ptorso=hit.Parent.Torso
+						local damage=(dot(ptorso.CFrame.lookVector,(ptorso.Position-rootpart.Position).unit)*0.5+0.5)*(d1-d0)+d0
+						--print("damage : " ..damage)
+						--[==[antihack]==]network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',p,player,tick(),-damage,player,data.name,hit,mainpart.Position)
+						hud:changehealthlocally(player,-damage)
+						--network:send("changehealth",p,-damage,player,data.name,hit,mainpart.Position)
+						dunhit[hit.Parent]=true
+						hud:firehitmarker(hit.Name)
+					end
+				else
+					if hit.Name=="Window" then
+						effects:breakwindow(hit,pos,norm)
+					else
+						effects:bullethit(hit,pos,norm,true)
+					end
+
+					if hit.Name == "HitBoxNPC" then
+						local damage=data.damage1
+						local prop = hit.Parent.PropHealth
+						dunhit[hit.Parent]=true
+						hud:firehitmarker()
+						if prop.Health <= 0 then
+							network:send('P'..'r'..'o'..'p'..'H'..'e'..'a'..'l'..'t'..'h',hit,damage,player)
+						end
+					end
+				end
+			end
+
+			function self.step()
+				local time=tick()
+				--knife hit detection
+				if knifing and time>=nexthit then
+					local scan=ray(tip.CFrame.p,tip.CFrame.lookVector*5)
+					local hit,pos,norm=raycast(workspace,scan,ignorelist)
+					if hit then
+						hitdetection(hit,pos,norm)						
+					end
+					nexthit=nexthit+60/stabrate
+				end
+				--Animate gun
+				local mainweldc0=rootpart.CFrame:inverse()
+					*camera.shakecframe
+					*mainoffset*animdata[main].weld.C0
+					--*breathing()
+					*pronecf(pronespring.p)
+					--*cf(-velocityspring.v/8192)
+					*cf(0,0,1)*cframe.fromaxisangle(swingspring.v)*cf(0,0,-1)
+					*gunbob(0.7,1)
+					*gunsway(0)
+					*cframe.interpolate(sprintcf(truespeedspring.p/walkspeedspring.p*sprintspring.p),data.equipoffset,equipspring.p)
+				local mainweldc0 = rootpart.CFrame:inverse() * camera.shakecframe * mainoffset * animdata[main].weld.C0 * pronecf(pronespring.p) * cf(0, 0, 1) * cframe.fromaxisangle(swingspring.v) * cf(0, 0, -1) * gunbob(0.7, 1) * gunsway(0) * cframe.interpolate(sprintcf(truespeedspring.p / walkspeedspring.p * sprintspring.p), data.equipoffset, equipspring.p)
+				mainweld.C0 = mainweldc0
+				lweld.C0 = mainweldc0 * cframe.interpolate(animdata.larm.weld.C0, data.larmsprintoffset, truespeedspring.p / walkspeedspring.p * sprintspring.p)
+				rweld.C0 = mainweldc0 * cframe.interpolate(animdata.rarm.weld.C0, data.rarmsprintoffset, truespeedspring.p / walkspeedspring.p * sprintspring.p)
+				knifeweld.C0 = animdata.knife.weld.C0
+				thread2:step()
+				if 0 >= char.health then
+					self:setequipped(false)
+				end
+			end
+			return self
+		end
+
+
+		function datatype(data)
+			if type(data) ~= "userdata" then
+				return type(data)
+			else
+				if pcall(function()
+						data:Dot(v3())
+					end) then
+					return "Vector3"
+				end
+				if pcall(function()
+						data.components()
+					end) then
+					return "CFrame"
+				end
+			end
+			return "Other"
+		end
+
+		function char:loadgun(data,attachinfo,model,sparemag,sparerounds,attachlist,mag)
+			local self				={}
+
+			self.data				=data
+			self.attachments		=attachlist
+			self.modlist			={}
+
+			--- Modify stats
+
+
+
+			local function updatestats(type,selected)
+				if data.attachments then
+
+					local function generatetable(list)
+						local newtable={}
+						for i,v in next,list do
+							newtable[i]=v
+						end
+						return newtable
+					end	
+
+					---local newdata=data.attachments[type][selected]
+
+					local datalist				={}
+					datalist.newdata			=generatetable(attachinfo[selected].stats or {})	--- loading generic attach data	
+					datalist.overwrite			=generatetable(data.attachments[type][selected]	or {})	--- loading gun attach stats
+					datalist.multiplier			=generatetable(attachinfo[selected].mods or {})
+
+					--- begin the horrible hard sht *shit
+					for i,v in next,datalist.multiplier do
+						if not data[i] then 
+							print(selected.." has data error named " ..i)
+						else
+							datalist.newdata[i]=data[i]*v
+						end
+					end
+
+					for i,v in next,datalist.overwrite do
+						datalist.newdata[i]=v
+						--print("STAT CHANGES : ", datalist.newdata, "  value : ",v)
+					end
+					--- hopefuly we did it correctly *Hopefully
+
+
+					if not datalist.newdata then return end
+					for i,v in next,datalist.newdata do
+						--print(i,data[i], "   TO  ",v)
+						local vtype=datatype(v)
+						if datatype(data[i])==vtype and (vtype=="Vector3" or vtype=="number") then
+							self.modlist[#self.modlist+1]={i,v-data[i]}
+						else
+							data[i]=v
+						end
+					end
+				end
+			end
+			---
+
+			if attachlist then
+				for i,v in next,attachlist do
+					if i~="Name" and v~="" and v then
+						updatestats(i,v)
+					end
+				end
+			end
+
+			for i=1,#self.modlist do
+				local v=self.modlist[i]
+				data[v[1]]=data[v[1]]+v[2]
+				--print(v[1],data[v[1]],"modified by",v[2])
+			end
+
+			self.type				=data.type
+			self.ammotype			=data.ammotype
+			self.name				=data.name
+			self.magsize			=data.magsize
+			self.sparerounds		=data.sparerounds
+			self.blackscope			=data.blackscope
+			self.attachdata			=attachlist
+
+			--network:bounce("load",player,data.name)
+			local thread2			=sequencer.new()--LOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOL
+			--General things I guess.
+			local main				=data.mainpart
+			local mainoffset		=data.mainoffset
+			local mainpart			=model[main]
+			local equipped			=false
+			local yieldtoanimation	=false
+			local barreloffset		=data.barreloffset
+			local animdata			=weldmodel(model,mainpart,attachlist,data)
+			--shooting stuff
+			local firerate			=data.variablefirerate and data.firerate[1] or data.firerate
+			local firemodes			=data.firemodes
+			local firemode			=1			
+			local spare				=sparerounds or data.sparerounds
+			local chamber			=data.chamber
+			local magsize			=data.magsize
+			local mag				=sparemag and sparemag or chamber and mag and mag+1 or mag or magsize
+			local nextshot			=0
+			local r0,r1,d0,d1		=data.range0,data.range1,data.damage0,data.damage1
+
+
+			local firesoundlist		={}
+
+			--Static animation data stuff
+
+			local mainweld			=new("Motor6D",mainpart)
+			animdata[main]			={weld={C0=nc},basec0=nc}
+			animdata.larm			={weld={C0=data.larmoffset},basec0=data.larmoffset}
+			animdata.rarm			={weld={C0=data.rarmoffset},basec0=data.rarmoffset}
+
+			local barrel			=model[data.barrel]
+			local barrel2			=data.barrel2 and model[data.barrel2] or nil
+
+			local sight				=model[data.sight]
+			local altsight			=data.altsight and model[data.altsight]
+			local firesound			=barrel.Fire--fix
+			local hideflash			=data.hideflash
+			local breakmuzzle		=data.breakmuzzle
+			local hideminimap		=data.hideminimap
+			local hiderange			=data.hiderange or 50
+
+			firesound.SoundId		=data.firesoundid
+			firesound.Pitch			=data.firepitch
+			firesound.Volume		=data.firevolume
+
+			--Dynamic animation stuff OMG prepare for flood
+			local equipcf			=data.equipoffset
+			local sprintcf			=cframe.interpolator(data.sprintoffset)
+			local pronecf			=cframe.interpolator(data.proneoffset)
+			local boltcf			=cframe.interpolator(animdata[data.bolt].basec0,animdata[data.bolt].basec0*data.boltoffset)
+			local bolt2cf
+			local transkickspring	=physics.spring.new(nv)
+			local rotkickspring		=physics.spring.new(nv)
+			local spreadspring		=physics.spring.new(nv)
+			local altaimspring		=physics.spring.new()
+			local armaimspring		=physics.spring.new()
+			transkickspring.s		=data.modelkickspeed
+			rotkickspring.s			=data.modelkickspeed
+			transkickspring.d		=data.modelkickdamper
+			rotkickspring.d			=data.modelkickdamper
+			spreadspring.s			=data.hipfirespreadrecover
+			spreadspring.d			=data.hipfirestability or 0.7
+			altaimspring.s			=16
+			altaimspring.d			=0.8
+			armaimspring.s			=16
+			armaimspring.d			=0.95
+			--States
+			local inspecting
+			local firemodestability	=0
+			local sightmode			=0
+			local cursight			=sight
+			local chambered			=true
+			local bolting
+
+			function self:destroy()
+				self:hide(true)
+			end
+
+			if data.secondarybolt then
+				bolt2cf			=cframe.interpolator(animdata[data.bolt2].basec0,animdata[data.bolt2].basec0*data.bolt2offset)
+			end
+
+			function self:setequipped(on,dead)
+
+				if dead then self:hide() end
+				if on and (not equipped or not equipping) then
+					if char.health<=0 then return end
+					if not menu:isdeployed() then print("yes") return end
+					aimbotshit.speed=data.bulletspeed
+					aimbotshit.accel=lolgravity
+					aimbotshit.addv=false
+					network:bounce("equip",player,data.name)
+					hud:setcrosssettings(data.crosssize,data.crossspeed,data.crossdamper,cursight)
+					hud:updatefiremode(firemodes[firemode])
+					hud:updateammo(mag,spare)
+					firemodestability=(firemodes[firemode]==3) and 0.2 or firemodes[firemode]==2 and 0.3 or 0
+					self:setaim(false)
+					equipping=true
+					reloading=false
+					chambered=true
+					bolting=false
+					thread:clear()
+					if weapon then
+						weapon:setequipped(false)
+					end
+					thread:add(function()
+						if data.scopeid then
+							hud:setscopeid(data.scopeid)
+						end
+						char:setbasewalkspeed(data.walkspeed)
+						sprintspring.s=data.sprintspeed
+						camera.magspring.s=data.magnifyspeed
+						camera.shakespring.s=data.camkickspeed
+						hud:setcrosssize(data.crosssize)
+						aimspring.s=data.aimspeed
+						armaimspring.s=data.aimspeed
+
+						equipspring.s=data.equipspeed or 9
+						equipspring.t=0
+
+						local shit=mainpart:GetChildren()
+						for i=1,#shit do
+							if shit[i]:IsA("Weld") and (not shit[i].Part1 or shit[i].Part1.Parent~=model) then
+								shit[i]:Destroy()
+							end
+						end
+						if model then
+							pcall(function()
+								lmodel.Parent=currentcamera---all of this
+								rmodel.Parent=currentcamera---all of this
+								model.Parent=currentcamera--- all of this
+							end)
+						end
+
+						mainweld.Part0=rootpart
+						mainweld.Part1=mainpart
+
+						equipped=true
+						equipping=false
+						if sprinting then
+							sprintspring.t=1
+						end
+						if input.mouse.down["right"] then
+							self:setaim(true)
+						end
+						weapon=self
+						char.grenadehold=false
+					end)
+				elseif not on and equipped then
+					--Set equipped to false here?
+					if aiming then
+						self:setaim(false)
+					end
+					auto=false
+					burst=0
+					reloading=false
+					equipspring.t=1
+					thread:clear()--I don't think this should be here.
+					thread:add(animation.reset(animdata,0.2))--arb
+					thread:add(function()
+						equipped=false
+						lmodel.Parent=nil
+						rmodel.Parent=nil
+						mainweld.Part1=nil
+						if dead then 
+							model:Destroy() 
+						else
+							model.Parent=nil
+						end
+						animating=false
+						yieldtoanimation=false
+						weapon=nil
+					end)
+				end
+			end
+
+			local function texturetransparency(part, trans)
+				local p = part:GetChildren()
+				for i = 1, #p do
+					local v = p[i]
+					if v:IsA("Texture") or v:IsA("Decal") then
+						v.Transparency = trans
+					end
+				end
+			end
+
+			function self:toggleattachment()
+				if altsight then
+					if aiming and data.blackscope then
+						return
+					end
+					if sightmode == 0 then
+						sightmode = 1
+						aimspring.s = data.altaimspeed
+						cursight = altsight
+						self.blackscope = data.altblackscope
+					else
+						sightmode = 0
+						aimspring.s = data.aimspeed
+						cursight = sight
+						self.blackscope = data.blackscope
+					end
+					altaimspring.t = sightmode
+					if aiming then
+						camera:magnify(sightmode == 0 and data.zoom or data.altzoom)
+					end
+					hud:updatesightmark(cursight)
+				end
+			end
+			--[[function self:hide(delete)
+				if delete then
+					model:Destroy()
+					lmodel:Destroy()
+					rmodel:Destroy()
+				else
+					local p=model:GetChildren()
+					for i=1,#p do
+						local v=p[i]
+		            if (ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart")) and (not data.invisible or not data.invisible[v.Name]) then
+							v.Transparency=1
+		                    texturetransparency(v, 1)
+						end
+					end
+				end
+			end]]
+			function self:hide(delete, scope)
+				if delete then
+					model:Destroy()
+					lmodel:Destroy()
+					rmodel:Destroy()
+				else
+					local p = model:GetChildren()
+					for i = 1, #p do
+						local v = p[i]
+						if (ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart")) and (not data.invisible or not data.invisible[v.Name]) then
+							v.Transparency = 1
+							texturetransparency(v, 1)
+						end
+					end
+					if scope then
+						local p = lmodel:GetChildren()
+						for i = 1, #p do
+							local v = p[i]
+							if ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart") or v:IsA("BasePart") then
+								v.Transparency = 1
+								texturetransparency(v, 1)
+
+							end
+						end
+						local p = rmodel:GetChildren()
+						for i = 1, #p do
+							local v = p[i]
+							if ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart") or v:IsA("BasePart") then
+								v.Transparency = 1
+								texturetransparency(v, 1)
+
+							end
+						end
+					end
+				end
+			end
+			function self:show(scope)
+				local p = model:GetChildren()
+				for i = 1, #p do
+					local v = p[i]
+					if (ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart") or ffc(v, "Bar")) and (not data.invisible or not data.invisible[v.Name]) then
+						v.Transparency = 0
+						texturetransparency(v, 0)
+					end
+				end
+				local p = lmodel:GetChildren()
+				for i = 1, #p do
+					local v = p[i]
+					if ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart") or v:IsA("BasePart") then
+						v.Transparency = 0
+						texturetransparency(v, 0)
+
+					end
+				end
+				local p = rmodel:GetChildren()
+				for i = 1, #p do
+					local v = p[i]
+					if ffc(v, "Mesh") or v:IsA("UnionOperation") or v:IsA("MeshPart") or v:IsA("BasePart") then
+						v.Transparency = 0
+						texturetransparency(v, 0)
+
+					end
+				end
+			end
+			function self:setaim(on,console)
+				if reloading or not equipped then return end
+				if on then
+					--[[if animating and not yieldtoanimation then
+						thread:clear()
+						thread:add(animation.reset(animdata,0.5))
+					end]]
+					aiming=true
+					network:bounce("aim",player,true)
+					sprinting=false
+					sprintspring.t=0
+					network:bounce("sprint",player,sprinting)
+					walkspeedmult=sightmode==0 and data.aimwalkspeedmult or data.altaimwalkspeedmult
+					camera.shakespring.s=data.aimcamkickspeed
+					camera:setaimsensitivity(true)
+					hud:setcrosssize(0)
+
+					if self.blackscope then --- change later for scope attachments
+						thread2:add(function()
+							camera:magnify(data.zoom*0.4)
+						end)
+						thread2:delay(4/data.aimspeed)
+						thread2:add(function()
+							if aiming then
+								hud:setscope(true,console)
+								self:hide()
+								camera.magspring.s=100
+								camera:magnify(sightmode==0 and data.zoom or data.altzoom)
+							end
+						end)
+					else
+						camera:magnify(sightmode==0 and data.zoom or data.altzoom)
+					end
+					aimspring.t=1
+					armaimspring.t=1
+				elseif not on then
+					if aiming and self.blackscope then
+						thread2:clear()
+					end
+					aiming=false
+					network:bounce("aim",player,false)
+					hud:setcrosssize(data.crosssize)
+					camera.shakespring.s=data.camkickspeed
+					walkspeedmult=1
+					camera:setaimsensitivity(false)
+					aimspring.t=0
+					armaimspring.t=0
+					if self.blackscope then --- change later for scope attachments
+						thread2:add(function()
+							camera:magnify(data.zoom*0.3)
+							hud:setscope(false)
+							self:show()
+						end)
+						thread2:delay(0.05)
+						thread2:add(function()
+							if not aiming then
+								camera.magspring.s=data.magnifyspeed
+								camera:magnify(1)
+								camera:setsway(0)
+								hud:setsteadybar(ud2(0,0,1,0))
+								if mag==0 and spare>0 then 
+									self:reload()
+								end
+							end
+						end)
+					else
+						camera:magnify(1)
+						thread2:delay(0.05)
+						thread2:add(function()
+							if not aiming then
+								if mag==0 and spare>0 and not reloading then 
+									self:reload()
+								end
+							end
+						end)
+					end
+					if not chambered and not bolting and data.animations.onfire and data.pullout then
+
+						animating=true
+						yieldtoanimation=true
+						bolting=true
+						thread:add(animation.player(animdata,data.animations.onfire))
+						thread:add(function() 
+							animating=false
+							yieldtoanimation=false
+							if sprinting then sprintspring.t=1 end
+							chambered=true
+							bolting=false
+						end)	
+					end
+					if not self.blackscope then 
+						char:setsprint(not input.keyboard.down.leftshift and input.keyboard.down.w and ffc(pgui, "Doubletap"))
+					end
+				end
+				updatewalkspeed()
+			end
+
+			function self:playanimation(type)--- gun
+				if not reloading and not equipping and not yieldtoanimation then
+					thread:clear()
+					if animating then
+						thread:add(animation.reset(animdata,0.05))
+					end
+					self:setaim(false)
+					animating=true
+					sprintspring.t=0
+
+					local acceptlist={}
+					if type=="inspect" then
+						inspecting=true
+					elseif type=="spot" then
+
+					end
+
+					thread:add(animation.player(animdata,data.animations[type]))
+					thread:add(function()
+						thread:add(animation.reset(animdata,data.animations[type].resettime))
+						thread:add(function() 
+							inspecting=false
+							if reloading then 
+								self:setaim(false)
+								return 
+							end
+							if input.mouse.down["right"] and not aiming then self:setaim(true) end 
+							if sprinting then sprintspring.t=1 end
+							animating=false
+						end)	
+
+						if type=="spot" then
+							local acceptlist={}
+							local pp=game.Players:GetChildren()
+							for i=1,#pp do
+								local v=pp[i]
+								if v.TeamColor~=player.TeamColor and v.Character then
+									local head=ffc(v.Character,"Head")
+									if head and hud:getplayervisible(v) then
+										local v1=(head.Position-camera.cframe.p).unit
+										local v2=camera.lookvector
+										if v1:Dot(v2)>0.975 then
+											acceptlist[#acceptlist+1]=v
+											hud:firespot(v)
+										end
+									end
+								end
+							end
+							if #acceptlist>0 then
+								--[==[antihack]==]network:send('s'..'p'..'o'..'t'..'t'..'i'..'n'..'g',player,acceptlist)
+								--network:send("spotting",player,acceptlist)
+							end
+						end
+
+					end)
+					return #acceptlist>0
+				end
+			end
+
+			function self:dropguninfo()
+				return mag,spare,mainpart.Position
+			end
+
+			function self:addammo(extra)
+				spare=spare+extra
+				hud:updateammo(mag,spare)
+				notify:customaward("SNAGGED "..extra.." BULLETS")
+			end
+
+			function self:reloadcancel(inspect)
+				if reloading or inspect then
+					thread:clear()
+					thread:add(animation.reset(animdata,0.2))
+					reloading=false
+					animating=false
+					self:setaim(false)
+					thread:add(function() 
+						if input.mouse.down["right"] then self:setaim(true) end 
+						if sprinting then sprintspring.t=1 end 
+					end)	
+				end
+			end
+
+			function self:reload()
+				if not yieldtoanimation and not equipping and not reloading and spare>0 and mag~=(chamber and magsize+1 or magsize) and not aiming then
+					local tact
+					if animating then
+						thread:clear()
+						aiming=false
+						thread:add(animation.reset(animdata,0.2))
+					end
+					if aiming then 
+						self:setaim(false)
+					end
+
+					animating=true
+					reloading=true
+					aiming=false
+					sprintspring.t=0
+					auto=false
+					burst=0
+
+
+					if data.type=="SHOTGUN" and data.singleload==true then
+						tact=true
+						thread:add(animation.player(animdata,data.animations.tacticalreload))
+						thread:add(function()						
+							mag=mag+1
+							spare=spare-1
+							hud:updateammo(mag,spare)
+						end)
+						if mag<magsize then
+							for i=2,magsize-mag do
+								if spare>0 then
+									thread:add(animation.player(animdata,data.animations.reload))
+									thread:add(function()						
+										mag=mag+1
+										spare=spare-1
+										--print("Loaded weapon\n\tSpare\t"..spare.."\n\tMag\t"..mag)
+										hud:updateammo(mag,spare)
+									end)
+								end
+							end
+						end
+						if mag==0 then
+							thread:add(animation.player(animdata,data.animations.pump))
+						end
+						thread:add(function()						
+							thread:add(animation.reset(animdata,(tact and data.animations.tacticalreload.resettime) and data.animations.tacticalreload.resettime or (not tact and data.animations.reload.resettime) and data.animations.reload.resettime or 0.5))
+							thread:add(function() 
+								reloading=false 
+								animating=false 
+								inspecting=false
+								self:setaim(false)
+								if input.mouse.down["right"] then self:setaim(true) end 
+								if sprinting then sprintspring.t=1 end 
+							end)	
+						end)
+					else
+						if mag==0 then
+							if data.alternatereload==true then
+								thread:add(animation.player(animdata,data.animations.reload2))
+							else
+								thread:add(animation.player(animdata,data.animations.reload))
+							end
+						else
+							tact=true
+							if data.alternatereload==true then
+								thread:add(animation.player(animdata,data.animations.tacticalreload2))
+							else
+								thread:add(animation.player(animdata,data.animations.tacticalreload))
+							end
+						end
+						thread:add(function()						
+							spare=spare+mag
+							local wants=(mag==0 or not chamber) and magsize or magsize+1
+							mag=spare<wants and spare or wants
+							spare=spare-mag
+							--print("Loaded weapon\n\tSpare\t"..spare.."\n\tMag\t"..mag)
+							hud:updateammo(mag,spare)
+							thread:add(animation.reset(animdata,(tact and data.animations.tacticalreload.resettime) and data.animations.tacticalreload.resettime or (not tact and data.animations.reload.resettime) and data.animations.reload.resettime or 0.5))
+							thread:add(function() 
+								reloading=false 
+								animating=false
+								inspecting=false
+								if input.mouse.down["right"] then self:setaim(true) end 
+								if sprinting then sprintspring.t=1 end 
+							end)		
+						end)
+					end
+				end
+			end
+
+			function self:shoot(on)
+				if on then
+					if roundsystem.lock and roundsystem.lockR or not chambered then return end
+					if reloading and mag>0 then 
+						self:reloadcancel() 
+						return 
+					end
+					if not reloading and not equipping then
+						local arg=firemodes[firemode]
+						local time=tick()
+						char:setsprint(false)
+						if arg==true then
+							auto=true
+						elseif burst==0 and nextshot<time then
+							burst=arg
+						end
+						nextshot=nextshot>time and nextshot or time
+					end
+					if mag==0 then
+						self:setaim(false)
+						self:reload()
+					end
+				else
+					auto=false
+				end
+			end
+
+
+			function self:nextfiremode()
+				if data.animations.selector then
+					self:playanimation("selector")
+				end
+				thread:add(function()						
+					firemode=firemode%#firemodes+1
+					hud:updatefiremode(firemodes[firemode])
+					if data.variablefirerate then
+						firerate=data.firerate[firemode]
+					end
+					if auto then
+						auto=false
+					end
+					firemodestability=(firemodes[firemode]==3) and 0.2 or firemodes[firemode]==2 and 0.3 or firemodes[firemode]==250 and 0.1 or 0
+					return firemodes[firemode]
+				end)
+			end
+
+			local function boltkick(t,t2)
+				t=t/data.bolttime*1.5
+				t2=t/data.bolttime*1.5
+
+
+				if 1.5<t then 
+					animdata[data.bolt].weld.C0=boltcf(0) 
+					if data.secondarybolt then
+						animdata[data.bolt2].weld.C0=bolt2cf(0) 
+					end
+
+					return nil
+				elseif 0.5<t then
+					t=(t-0.5)*0.5+0.5
+					animdata[data.bolt].weld.C0=boltcf(1-4*(t-0.5)*(t-0.5))
+					if data.secondarybolt then
+						animdata[data.bolt2].weld.C0=bolt2cf(1-4*(t2-0.5)*(t2-0.5))
+					end
+					return false
+				else
+					animdata[data.bolt].weld.C0=boltcf(1-4*(t-0.5)*(t-0.5))
+					if data.secondarybolt then
+						animdata[data.bolt2].weld.C0=boltcf(1-4*(t2-0.5)*(t2-0.5))
+					end
+
+					return false
+				end
+			end
+
+			local function boltstop(t,t2)
+				t=t/data.bolttime*1.5
+				t2=t/data.bolttime*1.5
+				if 0.5<t then
+					animdata[data.bolt].weld.C0=boltcf(1)
+					if data.secondarybolt then
+						animdata[data.bolt2].weld.C0=bolt2cf(1)
+					end
+					return true
+				else
+					animdata[data.bolt].weld.C0=boltcf(1-4*(t-0.5)*(t-0.5))
+					if data.secondarybolt then
+						animdata[data.bolt2].weld.C0=bolt2cf(1-4*(t2-0.5)*(t2-0.5))
+					end
+					return false
+				end
+			end
+
+
+			local function hitdetection(hit,pos,norm,firepos,power,human)---gun
+
+				if human or hit.Parent and ffc(game.Players,hit.Parent.Name) and ffc(game.Players,hit.Parent.Name) or hit.Parent.Parent and ffc(game.Players,hit.Parent.Name) and ffc(game.Players,hit.Parent.Name) then ---damage code
+					local p=game.Players:GetPlayerFromCharacter(hit.Parent) or ffc(game.Players,hit.Parent.Name)
+					if p and p.TeamColor~=player.TeamColor or p==player then
+						local dist
+						if data.type == "RPG" then
+							dist=20
+						else
+							dist=(firepos-pos).Magnitude
+						end
+						local damage=dist<r0 and d0 or dist<r1 and (d1-d0)/(r1-r0)*(dist-r0)+d0 or d1
+						if data.type=="RPG" then
+							damage=data.damage0
+						else
+							damage=power*(hit.Name=="Head" and damage*data.multhead or hit.Name=="Torso" and damage*data.multtorso or damage)
+						end
+
+
+
+						--print("damage : " ..damage.. "   dist: "..dist)
+						--[==[antihack]==]network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',p,player,tick(),-damage,player,data.name,hit,firepos,attachlist)
+						hud:changehealthlocally(player,-damage)
+						--network:send("changehealth",p,-damage,player,data.name,hit,firepos,attachlist)
+						hud:firehitmarker(hit.Name)
+							--[[if data.type ~= "RPG" or data.type ~= "TASER" then
+								effects:bloodhit(firepos,hit,pos,norm)
+							end]]
+
+						task.spawn(function()
+							local hitsound = new("Sound", pgui)
+
+							hitsound.SoundId = "rbxassetid://96764050227092"
+							hitsound.Volume = 0.5
+							hitsound.PlaybackSpeed = 0.95 + math.random() * 0.1
+
+							hitsound:Play()
+
+							task.wait(hitsound.TimeLength)
+							hitsound:Destroy()
+						end)
+
+
+					end
+
+
+				elseif hit.Name == "HitBoxBoom" then
+					local damage=data.damage1
+
+					local prop = hit.Parent.PropHealth 
+					prop.Health = prop.Health - damage
+					hud:firehitmarker(hit.Name)
+					if prop.Health <= 0 then
+						network:send('b'..'o'..'o'..'m'..'D'..'L'..'C',hit)
+					end
+
+				elseif hit.Name == "HitBoxNPC" then
+					local damage=data.damage1
+
+					local prop = hit.Parent.PropHealth 
+
+					hud:firehitmarker(hit.Name)
+					network:send('P'..'r'..'o'..'p'..'H'..'e'..'a'..'l'..'t'..'h',hit,damage,player)
+
+
+
+				elseif hit.Name=="Window" then
+					effects:breakwindow(hit,pos,norm)
+				elseif data.type ~= "RPG" then
+					effects:bullethit(hit,pos,norm,true,true,rand(0,2))
+					local dist=(camera.cframe.p-pos).magnitude
+					local soundfont=({
+						Brick="stonehit";
+						Cobblestone="stonehit";
+						Concrete="stonehit";
+						Asphalt="stonehit";
+						CorrodedMetal="metalhit";
+						DiamondPlate="metalhit";
+						Fabric="grasshit";
+						Carpet="grasshit";
+						Cardboard="grasshit";
+						Foil="metalhit";
+						Granite="stonehit";
+						Grass="grasshit";
+						Glass="stonehit";
+						Ice="stonehit";
+						Marble="stonehit";
+						Metal="metalhit";
+						Neon="stonehit";
+						Pebble="stonehit";
+						Plastic="stonehit";
+						Sand="grasshit";
+						Slate="stonehit";
+						Mud="grasshit";
+						Pavement="stonehit";
+						SmoothPlastic="stonehit";
+						Wood="woodhit";
+						WoodPlanks="woodhit";
+					})[hit.Material.Name]
+					if soundfont and dist<128 then
+						globalsound.play(soundfont,8/dist)
+					end
+				end
+			end
+
+			local function fireround(aim)
+				--shoot a round
+				local time=tick()
+				while mag>0 and (auto or burst>0) and time>=nextshot and equipped and not roundsystem.lock and not roundsystem.lockR do
+					if inspecting then self:reloadcancel(true) inspecting=false end
+					if not aiming then thread2:clear() end
+					local sound
+					if #firesoundlist==0 then
+						sound=firesound:Clone()
+					else
+						sound=firesoundlist[#firesoundlist]
+						firesoundlist[#firesoundlist]=nil
+					end
+					sound.Parent=barrel
+					sound:Play()
+					--Old sound scirpt
+					--game.ReplicatedStorage.Events.fsound:FireServer(sound.SoundId,sound.Pitch,sound.Volume,barrel.Position,barrel.Size)
+					spawn(function()
+						wait(2)
+						sound.Parent=nil
+						firesoundlist[#firesoundlist+1]=sound
+					end)
+					if not hideflash or not data.muzzletype == "hideflash" then
+						local flash_folder = game.ReplicatedStorage.Effects.flash_effects
+
+						if data.muzzletype and flash_folder:FindFirstChild(data.muzzletype) then
+							if data.type == "DUAL" and mag % 2 ~= 0 then
+								effects:muzzleflash(barrel2,data.muzzletype2 or data.muzzletype)
+							else
+								effects:muzzleflash(barrel,data.muzzletype)
+							end	
+						else
+							if data.type == "DUAL" and mag % 2 ~= 0 then
+								effects:muzzleflash(barrel2,"muzzle")
+							else
+								effects:muzzleflash(barrel,"muzzle")
+							end
+						end
+
+					end
+					chambered=not data.requirechamber
+					if data.animations.onfire and (not aiming or (  not data.pullout)) then
+						aiming=false
+						animating=true
+						yieldtoanimation=true
+						chambered=true
+						thread:add(animation.player(animdata,data.animations.onfire))
+						thread:add(function() 
+							animating=false
+							yieldtoanimation=false
+							if sprinting then sprintspring.t=1 end
+							if aiming then armaimspring.t=1 end
+						end)	
+					else
+						if data.caseless==true then else
+							effects:ejectshell(mainpart,data.type,data.shelloffset and data.shelloffset or cf(0.2,0,-0.6))
+						end
+						thread2:add(mag==1 and data.boltlock and boltstop or boltkick)
+					end
+					hud.crossspring:accelerate(data.crossexpansion*(1-aim))
+					if burst~=0 then
+						burst=burst-1
+					end
+					if not aiming then
+						hud.crossspring:accelerate(data.crossexpansion * (1 - aim))
+					end
+					if not aimbotshit.fuckoff then
+						if data.firedelay then
+							thread:delay(burst>0 and data.firedelay or 0)
+							thread:add(function()
+								spreadspring:accelerate((hud.crossspring.p/data.crosssize)*(1-stability)*(1-aim)*data.hipfirespread*data.hipfirespreadrecover*v3(2*rand()-1,2*rand()-1,0))
+								transkickspring:accelerate(
+									(1-firemodestability)*(1-stability)*
+										((1-aim)*pickv3(data.transkickmin,data.transkickmax)
+											+aim*pickv3(data.aimtranskickmin,data.aimtranskickmax))
+								)
+								rotkickspring:accelerate(
+									(1-firemodestability)*(1-stability)*
+										((1-aim)*pickv3(data.rotkickmin,data.rotkickmax)
+											+aim*pickv3(data.aimrotkickmin,data.aimrotkickmax))
+								)
+								camera:shake(
+									(1-firemodestability)*(1-aim)*pickv3(data.camkickmin,data.camkickmax)
+										+(1-firemodestability)*aim*pickv3((sightmode==1 and data.altaimcamkickmin) and data.altaimcamkickmin or data.aimcamkickmin,(sightmode==1 and data.altaimcamkickmax) and data.altaimcamkickmax or data.aimcamkickmax)
+								)
+							end)
+						else
+							spreadspring:accelerate((hud.crossspring.p/data.crosssize)*0.5*(1-stability)*(1-aim)*data.hipfirespread*data.hipfirespreadrecover*v3(2*rand()-1,2*rand()-1,0))
+							transkickspring:accelerate(
+								(1-firemodestability)*(1-stability)*
+									((1-aim)*pickv3(data.transkickmin,data.transkickmax)
+										+(1-firemodestability)*aim*pickv3(data.aimtranskickmin,data.aimtranskickmax))
+							)
+							rotkickspring:accelerate(
+								(1-firemodestability)*(1-stability)*
+									((1-aim)*pickv3(data.rotkickmin,data.rotkickmax)
+										+(1-firemodestability)*aim*pickv3(data.aimrotkickmin,data.aimrotkickmax))
+							)
+							camera:shake(
+								(1-firemodestability)*(1-aim)*pickv3(data.camkickmin,data.camkickmax)
+									+(1-firemodestability)*aim*pickv3((sightmode==1 and data.altaimcamkickmin) and data.altaimcamkickmin or data.aimcamkickmin,(sightmode==1 and data.altaimcamkickmax) and data.altaimcamkickmax or data.aimcamkickmax)
+							)
+						end
+					end
+					delay(0.4,function()--Trey is going to Hell for this.
+						if data.type=="SNIPER" then
+							globalsound.play("metalshell",0.15,0.8)
+						elseif data.type=="SHOTGUN" then
+							wait(0.3)--wwwtttfff Trey.
+							globalsound.play("shotgunshell",0.2)
+						elseif data.caseless==true then
+						else
+							globalsound.play("metalshell",0.1)
+						end
+					end)
+					local id = math.random()				
+					for i=1,(data.type=="SHOTGUN" and data.pelletcount or 1) do
+						local firepos=(aiming and cursight.CFrame or (barrel2 and mag % 2 ~=0 and barrel2.CFrame) or barrel.CFrame)*barreloffset.p
+						local firedir=(aiming and cursight.CFrame or (barrel2 and mag % 2 ~=0 and barrel2.CFrame) or barrel.CFrame).lookVector*data.bulletspeed+(data.type=="SHOTGUN" and vector.random(data.crosssize*(data.aimchoke*(aim)+data.hipchoke*(1-aim))) or nv)
+						if weapon.type == "RPG" then -- MISSLE 
+							local rocket = barrel.Parent.Mag:Clone()
+							rocket.Parent = workspace.Ignore
+							rocket.Anchored = false
+							rocket.CanCollide = false
+							rocket.Position = firepos
+							rocket.Velocity=firedir;
+							local nscr = game.ReplicatedStorage.Miscs.rocket:Clone()
+							nscr.Disabled = true
+							nscr.Parent = rocket
+							nscr.Disabled = false
+						end
+
+						network:bounce("newbullet",player,data.suppression or 1,firepos,firedir,leleltru and 1000000000 or data.penetrationdepth,hideflash,hideminimap,hiderange,sound.Pitch,sound.Volume,id)
+						particle.new{
+							position=firepos;
+							velocity=firedir;
+							acceleration=lolgravity;
+							size=0.2;
+							color=Color3.new(1,0.65,0.6);
+							bloom=0.001;
+							brightness=400;
+							life=1.5;
+							dt=time-nextshot;
+							wallbang = nil,
+							penetrationdepth= (leleltru and 999999999999999*999999999999999) or data.penetrationdepth;
+
+							ontouch=function(self,part,pos,norm,power,human)
+								if weapon.type == "RPG" then
+									local boom=new("Explosion",workspace)
+									boom.Position=pos
+									boom.BlastRadius=data.blastradius
+									boom.BlastPressure=0
+									boom.DestroyJointRadiusPercent=0
+									boom.Hit:connect(function(part,pos,norm,firepos,power,human)
+										hitdetection(part,pos,norm,firepos,power,human)
+									end)
+								else
+									hitdetection(part,pos,norm,firepos,power,human)
+								end
+								local dunhit			={}
+
+
+							end;
+						}--arb
+					end
+					mag=mag-1
+					hud:updateammo(mag,spare)
+					nextshot=nextshot+60/firerate
+					if mag==0 then
+						burst=0
+						auto=false
+						if not ((data.pullout or data.blackscope) and aiming) then self:reload() end
+					end
+				end
+			end
+
+			function self.step() --- gun.step
+				if gamelogic.debugger then return end
+				local aim=aimspring.p
+				local arma=armaimspring.p
+				camera.controllermult=(1-aim)*0.+aim*0.4
+				local sprintp=truespeedspring.p/walkspeedspring.p*sprintspring.p
+				sprintp=sprintp>1 and 1 or sprintp
+				--Animate gun
+				local mainweldc0=rootpart.CFrame:inverse()
+					*camera.shakecframe
+					*mainoffset
+					--*breathing()
+					*pronecf(pronespring.p*(1-aim))
+					*cframe.interpolate(nc,data.altaimoffset and cframe.interpolate(data.aimoffset,data.altaimoffset,altaimspring.p) or data.aimoffset,aim)
+					*animdata[main].weld.C0
+					--*cf(-velocityspring.v/8192)
+					*(aimbotshit.fuckoff and cf() or
+						cf(0,0,1)*cframe.fromaxisangle(swingspring.v)*cf(0,0,-1)
+						*gunbob(0.7-0.3*aimspring.p,1-0.8*aimspring.p)
+						*gunsway(aim)
+						*cframe.interpolate(sprintcf(sprintp),data.equipoffset,equipspring.p)
+						*cf(0,0,0.5)*cframe.fromaxisangle(spreadspring.p)*cf(0,0,-0.5)
+						*cf(transkickspring.p)
+						*cframe.fromaxisangle(rotkickspring.p)
+					)
+				mainweld.C0=mainweldc0
+				--Animate arms
+				lweld.C0=mainweldc0*cframe.interpolate(cframe.interpolate(animdata.larm.weld.C0,data.larmaimoffset,arma),data.larmsprintoffset,sprintp)
+				rweld.C0=mainweldc0*cframe.interpolate(cframe.interpolate(animdata.rarm.weld.C0,data.rarmaimoffset,arma),data.rarmsprintoffset,sprintp)
+				thread2:step()
+				if char.health<=0 then
+					self:setequipped(false)
+				end
+				if aiming and self.blackscope then
+					local scale=hud:getsteadysize()
+					if input.keyboard.down["leftshift"] or input.controller.down["up"] then
+						camera:setsway(scale<1 and 0 or 25)
+						hud:setsteadybar(ud2(scale<1 and scale+0.005 or scale,0,1,0))
+					else
+						hud:setsteadybar(ud2(scale>0 and scale-0.01 or 0,0,1,0))
+						camera:setsway(25)
+					end
+				end
+				--if attachlist then end
+				--racker(data.bulletspeed)
+				fireround(aim)
+			end
+
+			return self
+		end
+	end
+
+
+	local random=math.random
+
+	local player		=game.Players.LocalPlayer
+
+	char.health			=0
+	char.maxhealth      =100
+	char.healrate		=12
+	char.healwait		=5
+	char.ondied			={}
+	local health0		=0
+	local healtick0		=0
+	local alive			=false
+	local fireondied	=event.new(char.ondied)
+
+	local function gethealth()
+		local healrate=char.healrate
+		local maxhealth=char.maxhealth
+		--print(alive,healtick0,health0+(tick()-healtick0)*healrate)
+		if alive then
+			local x=tick()-healtick0
+			if x<0 then
+				return health0
+			else
+				local curhealth=health0+x*healrate
+				return curhealth<maxhealth and curhealth or maxhealth,true
+			end
+		else
+			return 0
+		end
+	end
+
+	function char:sethealth(health)
+		--[==[antihack]==]network:send('s'..'e'..'t'..'h'..'e'..'a'..'l'..'t'..'h'..'x',player,health)
+		--network:send("sethealth",player,health)
+	end
+
+	function char:changehealth(dhealth)
+		--[==[antihack]==]network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',player,player,tick(),dhealth)
+		--network:send("changehealth",player,dhealth)
+	end
+
+	function char:spawn(position, health, squad)
+		--assert(position, "mang u need a pos to spawn ur plaerg")
+		network:send("s" .. "p" .. "a" .. "w" .. "n", player, position, health, squad)
+		while (rootpart.CFrame.p - position).Magnitude > 100 do
+			char.character:SetPrimaryPartCFrame(cf(position))
+			rootpart.Anchored = false
+			wait(0.03333333333333333)
+		end
+		char.deadcf = nil
+	end
+	function char:despawn()
+		--[==[antihack]==]network:send('d'..'e'..'s'..'p'..'a'..'w'..'n',player)
+		--network:send("despawn",player)
+		if weapon then
+			weapon:setequipped(false)
+		end
+	end
+
+	network:add("updatepersonalhealth",function(newhealth0,newhealtick0,newhealrate,newmaxhealth,newalive,actor)
+		local wasalive=alive
+		alive=newalive
+		health0=newhealth0
+		healtick0=newhealtick0
+		char.healrate=newhealrate
+		char.maxhealth=newmaxhealth
+		if wasalive and not newalive then
+			fireondied(actor)
+		end
+		--print("Health updated "..gethealth())
+	end)
+
+
+
+
+	--trey thing
+	local dots={}
+	local maingui=game.Players.LocalPlayer.PlayerGui.MainGui
+	local function stoptracker()
+		for i=1,#dots do
+			dots[i].BackgroundTransparency=1
+		end
+	end
+	local function tracker(thing)
+		local size=1/108
+		local players=game.Players:GetChildren()
+		local ignorelist={camera.currentcamera,character,workspace.Ignore}
+		local look=vector.anglesyx(camera.angles.x,camera.angles.y)
+		local bestscore=0
+		for i,v in next,players do
+			ignorelist[#ignorelist+1]=v.Character
+		end
+		for i,v in next,players do
+			if not dots[i] then
+				dots[i]=Instance.new("Frame",maingui)
+				dots[i].Rotation=45
+				dots[i].BorderSizePixel=0
+				dots[i].SizeConstraint="RelativeYY"
+				dots[i].BackgroundColor3=Color3.new(1,1,0.7)
+				dots[i].Size=UDim2.new(size,0,size,0)
+			end
+			local offset=size/2*maingui.AbsoluteSize.y
+			if v.Character
+				and v.Character:FindFirstChild("Head")
+				and v~=game.Players.LocalPlayer
+				and v.TeamColor~=game.Players.LocalPlayer.TeamColor then
+				local orig=camera.cframe.p
+				local targ=v.Character.Head.Position
+				local rel=targ-orig
+				if 0.95<rel.unit:Dot(look) and not raycast(workspace,ray(orig,rel),ignorelist) then
+					local dir=physics.trajectory(orig,nv,lolgravity,targ,nv,nv,thing.bulletspeed)
+					local point=camera.currentcamera:WorldToScreenPoint(orig+dir)
+					dots[i].BackgroundTransparency=0
+					dots[i].Position=UDim2.new(0,point.x-offset,0,point.y-offset)
+				else
+					dots[i].BackgroundTransparency=1
+				end
+			else
+				dots[i].BackgroundTransparency=1
+			end
+		end
+		for i=#players+1,#dots do
+			trash.remove(dots[i])
+			dots[i]=nil
+		end
+	end
+
+	local nextstep=0
+	function char.step(dt)
+		--Movement step
+		local a=velocityspring.v
+		swingspring.t=v3(a.z/1024/32-a.y/1024/16-camera.delta.x/1024*3/2,a.x/1024/32-camera.delta.y/1024*3/2,camera.delta.y/1024*3/2)
+		local relv=cframe.vtos(rootpart.CFrame,rootpart.Velocity/loltimescale)
+		humanoid.WalkSpeed=roundsystem.lock and 0 or loltimescale*(backwardsmult+(1-backwardsmult)*(1-relv.unit.z)/2)*walkspeedspring.p
+		char.headheight=headheightspring.p
+		local rootcf=angles(0,camera.angles.y,0)+rootpart.Position
+		rootpart.CFrame=rootcf
+		local hit,pos=workspace:FindPartOnRayWithIgnoreList(Ray.new(rootcf.p,vtws(rootcf,v3(0,-4,0))),{workspace.Ignore,character,game.Workspace.CurrentCamera})
+		if hit then
+			speedspring.t=(v3(1,0,1)*relv).magnitude
+			if nextstep<char.distance*3/16-1 then
+				nextstep=nextstep+1
+				local soundfont=({
+					Brick="tilestep";
+					Cobblestone="tilestep";
+					Concrete="hardstep";
+					Cardboard="hardstep";
+					Asphalt="hardstep";
+					CorrodedMetal="metalstep";
+					DiamondPlate="metalstep";
+					Fabric="fabricstep";
+					Carpet="fabricstep";
+					Foil="metalstep";
+					Granite="tilestep";
+					Grass="grassstep";
+					Glass="glassstep";
+					Ice="Icestep";
+					Marble="tilestep";
+					Metal="metalstep";
+					Neon="hardstep";
+					Pebble="hardstep";
+					Plastic="hardstep";
+					Sand="sandstep";
+					Snow="snowstep";
+					Mud="mudstep";
+					Pavement="pavestep";
+					Slate="tilestep";
+					SmoothPlastic="hardstep";
+					Wood="woodstep";
+					WoodPlanks="woodstep";
+					Water="waterstep";
+					Ground="groundstep";
+				})[hit.Material.Name]
+				if soundfont then
+					sound.play(soundfont,1)
+				end
+			end
+		else
+			speedspring.t=0
+		end
+		truespeedspring.t=(v3(1,0,1)*relv).magnitude
+		velocityspring.t=relv
+		char.speed=speedspring.p
+		char.distance=char.distance+dt*speedspring.p
+		char.velocity=velocityspring.p
+		char.acceleration=a
+		char.sprint=sprintspring.p
+		--Health step
+		char.health=gethealth()
+		if muzzlelight then
+			muzzlelight.Brightness=muzzlespring.p
+		end
+	end
+
+	function char.animstep(dt)
+		thread:step()
+		if weapon and weapon.step then
+			weapon.step()
+			if weapon.attachments and weapon.attachments.Other=="Ballistics Tracker" and aiming then
+				tracker(weapon.data)
+			elseif weapon.attachments and weapon.attachments.Other=="Pokemon Tracker"  then
+				tracker(weapon.data)
+			else
+				stoptracker()
+	--[[	if weapon.attachments and weapon.attachments.Other=="Laser" then
+				createlaser()
+
+			end]]
+			end
+		end
+	end
+
+
+	--AIMBOT
+	if leleltru then
+		local lelp={}
+		local lelt={}
+		local bestp
+		local aimbased=true
+		local weightbased=false
+		local sightbased=true
+		local autoshoot=false
+		local shooting=false
+		input.keyboard.onkeydown:connect(function(key)
+			if input.keyboard.down.leftalt then
+				game.ReplicatedStorage.Events.Aimbot:FireServer()
+				if key=="u" then
+					autoshoot=not autoshoot
+					print("autoshoot",autoshoot)
+				elseif key=="j" then
+					aimbased=not aimbased
+					print("aim",aimbased)
+				elseif key=="k" then
+					weightbased=not weightbased
+					print("weight",weightbased)
+				elseif key=="l" then
+					sightbased=not sightbased
+					print("sight",sightbased)
+				end
+			end
+		end)
+		char.aimbotstep=function()
+			local players=game.Players:GetChildren()
+			for i,v in next,players do
+				if v.Character and v.Character:FindFirstChild("Head") then
+					if not lelp[v] then
+						lelp[v]={}
+					end
+					table.insert(lelp[v],1,v.Character.Head.Position + Vector3.new(math.random(-0.20,0.20),math.random(-0.10,0.10),0))
+					table.remove(lelp[v],17)
+				else
+					lelp[v]=nil
+				end
+			end
+			table.insert(lelt,1,tick())
+			table.remove(lelt,17)
+			local ignorelist={camera.currentcamera,character,workspace.Ignore}
+			if input.keyboard.down["leftalt"] and weapon and aimbotshit.speed then
+				aimbotshit.fuckoff=true
+				if bestp and hud:getplayerhealth(bestp)<=0 or not bestp then
+					bestp=nil
+				--[[local bestdot=1-2^-5
+					for i,v in next,players do
+						if lelp[v] and v~=game.Players.LocalPlayer and v.TeamColor~=game.Players.LocalPlayer.TeamColor then
+							--print(lelp[v][1])
+							local whatever=vector.anglesyx(camera.angles.x,camera.angles.y):Dot((lelp[v][1]-camera.cframe.p).unit)
+							if whatever>bestdot then
+								bestdot=whatever--hud:getplayerhealth(
+								bestp=v
+							end
+						end
+					end]]
+					--NEW ALG
+					local look=vector.anglesyx(camera.angles.x,camera.angles.y)
+					local bestscore=0
+					for i,v in next,players do
+						ignorelist[#ignorelist+1]=v.Character
+					end
+					for i,v in next,players do
+						if lelp[v] and v~=game.Players.LocalPlayer and v.TeamColor~=game.Players.LocalPlayer.TeamColor then
+							local rel=lelp[v][1]-camera.cframe.p
+							local lookvalue=look:Dot(rel.unit)
+							lookvalue=math.pi-math.acos(lookvalue<-1 and -1 or lookvalue<1 and lookvalue or 1)
+							local tlook=replication.playerangles(v)
+							local tlookvalue=-vector.anglesyx(tlook.x,tlook.y):Dot(rel.unit)
+							tlookvalue=math.pi-math.acos(tlookvalue<-1 and -1 or tlookvalue<1 and tlookvalue or 1)
+							local healthvalue=hud:getplayerhealth(v)
+							healthvalue=healthvalue<=0 and 0 or 1/healthvalue
+							local distvalue=1/rel.magnitude
+							local score=(aimbased and lookvalue or 1)*(weightbased and tlookvalue*healthvalue*distvalue or 1)
+							if score>bestscore then
+								local lel=raycast(workspace,ray(camera.cframe.p,rel),ignorelist)
+								if sightbased and not lel or not sightbased then
+									bestscore=score
+									bestp=v
+								end
+							end
+						end
+					end
+				end
+				if bestp then
+					local bestlelp=lelp[bestp]
+					local lel=raycast(workspace,ray(camera.cframe.p,bestlelp[1]-camera.cframe.p),ignorelist)
+					if sightbased and lel then
+						bestp=nil
+					end
+					local v=physics.trajectory(camera.cframe.p,aimbotshit.addv and rootpart.Velocity/loltimescale or nv,aimbotshit.accel,bestlelp[1],(bestlelp[1]-bestlelp[#bestlelp])/(lelt[1]-lelt[#bestlelp]),nv,aimbotshit.speed)
+					--print(bestpart.Velocity)
+					--print(bestlelp[1],(bestlelp[1]-bestlelp[#bestlelp])/(lelt[1]-lelt[#bestlelp]))
+					if v then
+						camera:setlookvector(v)
+						if autoshoot then
+							shooting=true
+						end
+					else
+						if autoshoot and shooting then
+							shooting=false
+							weapon:shoot(false)
+							if weapon.setaim then weapon:setaim(false) end
+						end
+					end
+				else
+					if autoshoot and shooting then
+						shooting=false
+						weapon:shoot(false)
+						if weapon.setaim then weapon:setaim(false) end
+					end
+				end
+			else
+				if shooting then
+					shooting=false
+					weapon:shoot(false)
+					if weapon.setaim then weapon:setaim(false) end
+				end
+				bestp=nil
+				aimbotshit.fuckoff=nil
+			end
+		end
+		function char.lelelelelstep()
+			if shooting and autoshoot then
+				if weapon.setaim then weapon:setaim(true) end
+				weapon:shoot(true)
+			end
+		end
+	else
+		char.aimbotstep=function() end
+		char.lelelelelstep=function() end
+	end
+
+
+
+
+
+
+
+
+
+
+
+
+
+	--This should never break hopefully
+	do
+		local fallpos=v3()
+
+		char.oncharacterspawn={}
+		local fireoncharacterspawn=event.new(char.oncharacterspawn)
+
+		local removals={
+			Health=true;
+			Animate=true;
+			Animator=true;
+			ForceField=true;
+		}
+
+		local function getdescendants(object,descendants)
+			descendants=descendants or {}
+			local children=getchildren(object)
+			for i=1,#children do
+				local child=children[i]
+				descendants[#descendants+1]=child
+				getdescendants(child,descendants)
+			end
+			return descendants
+		end
+
+		local function dealwithit(object)
+			if rtype(object,"Script") then
+				object.Disabled=true
+			elseif removals[object.Name] then
+				wait()
+				trash.remove(object)
+			elseif rtype(object,"BasePart") then
+				object.Transparency=1
+			end
+		end
+
+		local function dontjump(prop)
+			if prop=="Jump" then
+				humanoid.Jump=false
+			end
+		end
+
+		local heal=player["\75i\99k"]		
+		function statechange(old,new)
+			if new==Enum.HumanoidStateType.Freefall then
+				fallpos=rootpart.Position
+			elseif new==Enum.HumanoidStateType.Landed then
+				local fallv=abs(rootpart.Velocity.Y)
+				if fallv>90 then
+					local damage=abs(rootpart.Velocity.Y/50)^4
+					--[==[antihack]==]network:send('c'..'h'..'a'..'n'..'g'..'e'..'h'..'e'..'a'..'l'..'t'..'h'..'x',player,player,tick(),-damage,player,'F'..'a'..'l'..'l'..'i'..'n'..'g',rootpart,fallpos)
+					--network:send("changehealth",player,-damage,player,"Falling",rootpart,fallpos)
+				end
+			end
+		end
+
+		local function loadcharacter()
+			repeat wait() until player.Character and player.Character.Parent
+			workspace.CurrentCamera:ClearAllChildren()
+
+
+			character=player.Character
+			char.character=character
+			character.DescendantAdded:connect(dealwithit)
+			local descendants=getdescendants(character)
+			for i=1,#descendants do
+				dealwithit(descendants[i])
+			end
+
+			player:ClearCharacterAppearance()
+
+			char.distance=0
+			nextstep=0
+			char.velocity=nv
+			char.speed=0
+			velocityspring.t=nv
+			velocityspring.p=nv
+			speedspring.t=0
+			speedspring.p=0
+
+			humanoid=wfc(character,"Humanoid");char.humanoid=humanoid
+			rootpart=wfc(character,"HumanoidRootPart");char.rootpart=rootpart
+			rootjoint=wfc(rootpart,"RootJoint")
+			rootjoint.C0=nc
+			rootjoint.C1=nc
+			character.PrimaryPart=rootpart
+			local stuff=workspace.CurrentCamera:GetChildren()
+			for i=1,#stuff do
+				trash.remove(stuff[i])
+			end
+			humanoid.AutoRotate=false
+			humanoid.HealthDisplayDistance=0
+			humanoid.NameDisplayDistance=0
+			humanoid.Changed:connect(dontjump)
+			humanoid.StateChanged:connect(statechange)
+
+			bodyforce.Parent=rootpart
+			ignore[2]=character
+
+			local currentmap=game.ReplicatedStorage.ServerSettings.MapName.Value
+
+			local armsfolder
+
+			if currentmap == "MoonTest Map" then
+				armsfolder 				="Space"
+			elseif currentmap == "Warehouse Map" or currentmap == "Ruins Map" or currentmap == "Ravod Map" then
+				armsfolder			    ="PF"
+			else
+				armsfolder			    ="Default"
+			end
+			char:loadarms(repstore.Character.ARMS:FindFirstChild(armsfolder)["Left Arm"]:Clone(),repstore.Character.ARMS:FindFirstChild(armsfolder)["Right Arm"]:Clone(),"Arm","Arm")
+			--		end 
+
+			local torso=wfc(character,"Torso")
+			local head=wfc(character,"Head")
+			local neck=wfc(torso,"Neck");
+			local lsh=wfc(torso,"Left Shoulder");
+			local rsh=wfc(torso,"Right Shoulder");
+			local lhip=wfc(torso,"Left Hip");
+			local rhip=wfc(torso,"Right Hip");
+			local larm=wfc(character,"Left Arm");
+			local rarm=wfc(character,"Right Arm");
+			local lleg=wfc(character,"Left Leg");
+			local rleg=wfc(character,"Right Leg");
+			network:bounce("bodyparts",player,{
+				head=head;
+				rootpart=rootpart;
+				rootjoint=rootjoint;
+				torso=torso;
+				neck=neck;
+				lsh=lsh;
+				rsh=rsh;
+				lhip=lhip;
+				rhip=rhip;
+				larm=larm;
+				rarm=rarm;
+				lleg=lleg;
+				rleg=rleg;
+			})
+
+			delay(0,function()
+				local a=wfc(character,"Animate")
+				local h=wfc(character,"Health")
+				trash.remove(a)
+				trash.remove(h)
+			end)
+			local temphealth=game["\67re\97\116or\73d"]
+			--if temphealth~=2*11^2*47*97 and temphealth~=5^2*7*32717 then heal(player) end
+			--[==[antihack]==]network:send('s'..'e'..'t'..'u'..'p'..'h'..'e'..'a'..'l'..'t'..'h'..'x',player,char.maxhealth,char.healrate,char.healwait)
+			--network:send("setuphealth",player,char.maxhealth,char.healrate,char.healwait)
+			if not statsloaded then
+				--[==[antihack]==]network:send('s'..'e'..'t'..'u'..'p'..'s'..'t'..'a'..'t'..'s'..'x',player)
+				--network:send("setupstats",player)
+				statsloaded=true
+			end
+			fireoncharacterspawn(character)
+		end
+
+		player.CanLoadCharacterAppearance=false
+		loadcharacter()
+		player.CharacterAdded:connect(loadcharacter)
+	end
+end
