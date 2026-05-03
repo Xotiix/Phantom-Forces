@@ -1,0 +1,4326 @@
+local event={}
+local network={}
+local startergui={}
+local playerstates={}
+local database={}
+local vector={}
+local environment={}
+local roundsystem={}
+
+local loltimescale=1
+local loltick=tick
+local function tick()
+	return loltimescale*loltick()
+end
+
+--+ no moar stupidity with spawning
+if not game:GetService("RunService"):IsStudio() then
+	script.Parent.teston.Value=false
+end
+
+
+
+
+-- event module
+-- By AxisAngle (Trey Reynolds)
+
+print("Loading event module")
+
+do
+	function event.new(eventtable)
+		local self = eventtable or {}
+
+		local functions = {}
+		local removelist = {}
+		local pendingdeletion = false
+
+		------------------------------------------------------------
+		--++ connect
+		------------------------------------------------------------
+		function self:connect(func)
+			functions[#functions + 1] = func
+
+			return function()
+				if not removelist[func] then
+					removelist[func] = true
+					pendingdeletion = true
+				end
+			end
+		end
+
+		------------------------------------------------------------
+		--++ fire
+		------------------------------------------------------------
+		return function(...)
+			if pendingdeletion then
+				pendingdeletion = false
+
+				local write = 1
+				for read = 1, #functions do
+					local f = functions[read]
+					functions[read] = nil
+
+					if removelist[f] then
+						removelist[f] = nil
+					else
+						f(...)
+						functions[write] = f
+						write = write + 1
+					end
+				end
+			else
+				for i = 1, #functions do
+					functions[i](...)
+				end
+			end
+		end, self
+	end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- network module
+-- by AxisAngle (Trey Reynolds)
+
+print("Loading network module")
+
+do
+	local type			=type
+	local remove		=table.remove
+
+	local Players		=game:GetService("Players")
+	local RunService	=game:GetService("RunService")
+
+	local bounceevent	=game.ReplicatedStorage:WaitForChild("BounceEvent")
+	local remoteevent	=game.ReplicatedStorage:WaitForChild("RemoteEvent")
+	local remotefunc	=game.ReplicatedStorage:WaitForChild("RemoteFunction")
+
+	local fireclient	=remoteevent.FireClient
+	local fireall		=remoteevent.FireAllClients
+	local invokeclient	=remotefunc.InvokeClient
+
+	local funcs			={}
+	local listeners		={}
+	local tickdiscs		={}
+	local pings			={}
+	local playerkeys	={}
+
+	local pingrate		=1
+	local lastping		=tick()
+
+	local players		=Players:GetPlayers()
+	network.players		=players
+
+	------------------------------------------------------------
+	--++ registration
+	------------------------------------------------------------
+	function network:add(name,func)
+		funcs[name]=func
+	end
+
+	function network:listen(name,func)
+		listeners[name]=func
+	end
+
+	------------------------------------------------------------
+	--++ sending
+	------------------------------------------------------------
+	function network:send(player,name,...)
+		local listener=listeners[name]
+		if listener then
+			listener(...)
+		end
+
+		if type(player)=="table" then
+			for i=1,#player do
+				fireclient(remoteevent,player[i],name,...)
+			end
+		else
+			fireclient(remoteevent,player,name,...)
+		end
+	end
+
+	function network:bounce(name,...)
+		local listener=listeners[name]
+		if listener then
+			listener(...)
+		end
+		fireall(bounceevent,name,...)
+	end
+
+	function network:fetch(player,...)
+		if type(player)=="table" then
+			local returns={}
+			for i=1,#player do
+				local p=player[i]
+				returns[p]={invokeclient(remotefunc,p,...)}
+			end
+			return returns
+		else
+			return invokeclient(remotefunc,player,...)
+		end
+	end
+
+	------------------------------------------------------------
+	--++ key / ping handling
+	------------------------------------------------------------
+	local function getkey(player)
+		if not playerkeys[player] then
+			playerkeys[player]=1
+		end
+		playerkeys[player]=94906230*playerkeys[player]%94906249
+		return playerkeys[player]
+	end
+
+	local function getping(player)
+		return pings[player] or 0
+	end
+	network.ping=getping
+
+	function network.toplayertick(player,tick)
+		return tick+(tickdiscs[player] or 0)
+	end
+
+	function network.fromplayertick(player,tick)
+		return tick-(tickdiscs[player] or 0)
+	end
+
+	------------------------------------------------------------
+	--++ remote dispatch
+	------------------------------------------------------------
+	local function call(player,key,name,...)
+		local curkey=playerkeys[player]
+		if key==getkey(player) then
+			local func=funcs[name]
+			if func then
+				return func(...)
+			end
+		else
+			player:Kick("i gatchu ;)")
+			playerkeys[player]=curkey
+		end
+	end
+
+	------------------------------------------------------------
+	--++ events
+	------------------------------------------------------------
+	bounceevent.OnServerEvent:Connect(function(player,key,name,...)
+		local curkey=playerkeys[player]
+		if key==getkey(player) then
+			local listener=listeners[name]
+			if listener then
+				listener(...)
+			end
+			for i=1,#players do
+				local otherplayer=players[i]
+				if otherplayer~=player then
+					fireclient(bounceevent,otherplayer,name,...)
+				end
+			end
+		else
+			print("Got us a haker")
+			playerkeys[player]=curkey
+		end
+	end)
+
+	remoteevent.OnServerEvent:Connect(call)
+	remotefunc.OnServerInvoke=call
+
+	------------------------------------------------------------
+	--++ ping handler
+	------------------------------------------------------------
+	network:add("ping",function(senttick,player,playertick)
+		local time=tick()
+		local disc=playertick-(time+senttick)/2
+		local ping=(time-senttick)/2
+		ping=ping<0.5 and ping or 0.5
+
+		if tickdiscs[player] then
+			tickdiscs[player]=0.95*tickdiscs[player]+0.05*disc
+		else
+			tickdiscs[player]=disc
+		end
+
+		if pings[player] then
+			pings[player]=0.95*pings[player]+0.05*ping
+		else
+			pings[player]=ping
+		end
+	end)
+
+	------------------------------------------------------------
+	--++ heartbeat ping
+	------------------------------------------------------------
+	RunService.Stepped:Connect(function()
+		local time=tick()
+		if 1/pingrate < time-lastping then
+			lastping=time
+			network:bounce("ping",time)
+		end
+	end)
+
+	------------------------------------------------------------
+	--++ player tracking
+	------------------------------------------------------------
+	Players.PlayerAdded:Connect(function(player)
+		players[#players+1]=player
+		network:send(player,"ping",tick())
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		for i=1,#players do
+			if player==players[i] then
+				remove(players,i)
+				break
+			end
+		end
+	end)
+end
+
+
+
+
+
+-- database module
+-- By AxisAngle and litozinnamon
+print("Loading database module")
+
+do
+	------------------------------------------------------------
+	--++ services
+	------------------------------------------------------------
+	local DataStoreService = game:GetService("DataStoreService")
+	local Players          = game:GetService("Players")
+	local RunService       = game:GetService("RunService")
+
+	------------------------------------------------------------
+	--++ locals
+	------------------------------------------------------------
+	local sub    = string.sub
+	local find   = string.find
+	local concat = table.concat
+	local pcall  = pcall
+	local type   = type
+
+	------------------------------------------------------------
+	--++ datastores
+	------------------------------------------------------------
+	local datastore = DataStoreService:GetDataStore("PENISJOKE") --+ DEPT.CASUAL|OREN.OS ▪ DEPT.COMP|NEXA.OS ▪ DEPT.LW|AURA-9
+	local statstore = DataStoreService:GetDataStore("purchases")
+
+	------------------------------------------------------------
+	--++ state
+	------------------------------------------------------------
+	local userdatareaders = {}
+	local userdatawriters = {}
+	local cache           = {}
+
+	database.up = true
+
+	------------------------------------------------------------
+	--++ stat increment
+	------------------------------------------------------------
+	function database.increment(key)
+		database.up = pcall(function()
+			statstore:IncrementAsync(key)
+		end)
+	end
+
+	------------------------------------------------------------
+	--++ ordered data helpers
+	------------------------------------------------------------
+	local function packordereddata(experience, kills)
+		experience = experience < 2^29 and experience or 2^29 - 1
+		kills      = kills < 2^22 and kills or 2^22 - 1
+		return 2^22 * experience + kills
+	end
+
+	local function unpackordereddata(num)
+		return (num - num % 2^22) / 2^22, num % 2^22
+	end
+
+	------------------------------------------------------------
+	--++ deserialize
+	------------------------------------------------------------
+	local function read(data, s)
+		s = s or 1
+		local nameend = find(data, "-", s)
+		local numend  = find(data, ":", nameend + 1)
+		local dtype   = sub(data, s, nameend - 1)
+		local len     = sub(data, nameend + 1, numend - 1) + 0
+		local a, b    = numend + 1, numend + len
+
+		if dtype == "b" then
+			return sub(data, a, a) == "t", b
+		elseif dtype == "n" then
+			return sub(data, a, b) + 0, b
+		elseif dtype == "s" then
+			return sub(data, a, b), b
+		elseif dtype == "t" then
+			local t, n = {}, 0
+			local i = a
+			while i <= b do
+				local value, e = read(data, i)
+				local sep = sub(data, e + 1, e + 1)
+				if sep == "=" then
+					local index = value
+					value, e = read(data, e + 2)
+					t[index] = value
+				else
+					n = n + 1
+					t[n] = value
+				end
+				i = e + 2
+			end
+			return t, b
+		else
+			return userdatareaders[dtype](data, a, b), b
+		end
+	end
+
+	------------------------------------------------------------
+	--++ serialize
+	------------------------------------------------------------
+	local function write(data)
+		local dtype = type(data)
+
+		if dtype == "boolean" then
+			return data and "b-4:true" or "b-5:false", dtype
+		elseif dtype == "number" then
+			local str = data .. ""
+			return "n-" .. #str .. ":" .. str, dtype
+		elseif dtype == "string" then
+			return "s-" .. #data .. ":" .. data, dtype
+		elseif dtype == "table" then
+			local buffer, n = {}, 1
+			local len = 0
+			local i = 1
+
+			while data[i] do
+				local str = write(data[i]) .. ";"
+				n = n + 1
+				buffer[n] = str
+				len = len + #str
+				i = i + 1
+			end
+
+			for k, v in next, data do
+				if type(k) ~= "number" or k % 1 ~= 0 or k >= i then
+					local str = write(k) .. "=" .. write(v) .. ";"
+					n = n + 1
+					buffer[n] = str
+					len = len + #str
+				end
+			end
+
+			buffer[1] = "t-" .. len .. ":"
+			return concat(buffer), dtype
+		else
+			for tag, writer in next, userdatawriters do
+				local ser = writer(data)
+				if ser then
+					return ser, tag
+				end
+			end
+		end
+	end
+
+	database.deserialize = read
+	database.serialize   = write
+
+	------------------------------------------------------------
+	--++ save
+	------------------------------------------------------------
+	local function save(key, datatable)
+		local success = pcall(function()
+			local data = write(datatable or cache[key])
+			if not data then
+				return
+			end
+
+			local chunkSize  = 64998
+			local totalChunks = math.ceil(#data / chunkSize)
+
+			for i = 1, totalChunks do
+				local chunk = sub(
+					data,
+					(i - 1) * chunkSize + 1,
+					i * chunkSize
+				)
+
+				datastore:UpdateAsync(key .. ":" .. i, function()
+					return chunk
+				end)
+			end
+
+			datastore:UpdateAsync(key .. ":" .. (totalChunks + 1), function()
+				return false
+			end)
+		end)
+
+		database.up = success
+		return success
+	end
+
+	------------------------------------------------------------
+	--++ load
+	------------------------------------------------------------
+	function database.load(key, wipe)
+		if cache[key] then
+			return cache[key]
+		end
+
+		local i = 0
+		local data = ""
+
+		while #data % 64998 == 0 do
+			i = i + 1
+			local chunk = datastore:GetAsync(key .. ":" .. i)
+			if chunk then
+				data = data .. chunk
+			else
+				break
+			end
+		end
+
+		if #data > 0 and not wipe then
+			local datatable = read(data)
+			cache[key] = datatable
+			return datatable, data
+		else
+			local datatable = {
+				stats      = { money = 0 },
+				settings   = { x = 5 },
+				unlocks    = { x = 5 },
+				buyhistory = { x = 5 },
+			}
+			cache[key] = datatable
+			return datatable, write(datatable)
+		end
+	end
+
+	------------------------------------------------------------
+	--++ clear / manual save
+	------------------------------------------------------------
+	function database.clear(key)
+		if cache[key] then
+			local success = save(key)
+			if success then
+				cache[key] = nil
+			end
+			return success
+		end
+	end
+
+	function database.manualsave(key)
+		return save(key)
+	end
+
+	------------------------------------------------------------
+	--++ autosave
+	------------------------------------------------------------
+	local saveInterval = 120
+	local nextSave = os.clock() + saveInterval
+	
+	RunService.Heartbeat:Connect(function()
+		if os.clock() < nextSave then
+			return
+		end
+
+		nextSave = os.clock() + saveInterval
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			local success = save(player.UserId)
+
+			if success then
+				print("💽|Data Saved.")
+				network:send(player, "datasaved", true)
+			else
+				warn("⚠|Data Save FAILED.")
+				network:send(player, "datasaved", false)
+			end
+		end
+	end)
+
+	------------------------------------------------------------
+	--++ player leave save
+	------------------------------------------------------------
+	Players.PlayerRemoving:Connect(function(player)
+		local success = database.clear(player.UserId)
+
+		network:send(player, "datasaved", success == true)
+	end)
+end
+
+
+
+
+
+
+
+
+-- startergui module
+-- By litozinnamon
+print("Load startergui")
+do
+	--+ services
+	local Players			= game:GetService("Players")
+	local Teams				= game:GetService("Teams")
+	local Debris			= game:GetService("Debris")
+	local StarterGui		= game:GetService("StarterGui")
+	local ReplicatedStorage	= game:GetService("ReplicatedStorage")
+	local Workspace			= game:GetService("Workspace")
+
+	--+ shortcuts
+	local wfc			= game.WaitForChild
+	local ffc			= game.FindFirstChild
+	local ud2			= UDim2.new
+	local ceil			= math.ceil
+	local cf			= CFrame.new
+	local v3			= Vector3.new
+	local color			= Color3.new
+
+	--+ raycast
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.IgnoreWater = true
+
+	--+ helpers
+	local infolder = function(l, e)
+		for i = 1, #l do
+			if l[i].Name == e then
+				return l[i]
+			end
+		end
+	end
+
+	--+ assets
+	local playertag		= ReplicatedStorage.Character.PlayerTag
+	local misc			= ReplicatedStorage.Miscs
+	local playerstat	= misc.Player
+
+	local board			= wfc(StarterGui, "Leaderboard")
+	local main			= wfc(board, "Main")
+	local global		= wfc(board, "Global")
+
+	local noobs			= wfc(main, "Anarchy")
+	local guests		= wfc(main, "Reign")
+
+	local noobsdata		= wfc(wfc(noobs, "DataFrame"), "Data")
+	local guestsdata	= wfc(wfc(guests, "DataFrame"), "Data")
+
+	noobsdata:ClearAllChildren()
+	guestsdata:ClearAllChildren()
+
+	---------------------------------------------------------
+	--++ organize function
+	---------------------------------------------------------
+	function organize()
+		--+ check players in correct teams
+		local pp = Players:GetPlayers()
+		for i = 1, #pp do
+			local v = pp[i]
+			local rightparent =
+				v.TeamColor == Teams.Anarchy.TeamColor and noobsdata or guestsdata
+			local wrongparent =
+				v.TeamColor ~= Teams.Anarchy.TeamColor and noobsdata or guestsdata
+
+			local right = ffc(rightparent, v.Name)
+			local wrong = ffc(wrongparent, v.Name)
+
+			if not right and wrong then
+				wrong.Parent = rightparent
+			end
+		end
+
+		--+ reposition and resize
+		local gd = noobsdata:GetChildren()
+		for i = 1, #gd do
+			gd[i].Position = ud2(0, 0, 0, i * 10)
+		end
+		noobsdata.Parent.CanvasSize = ud2(0, 0, 0, (#gd + 1) * 25)
+
+		local pd = guestsdata:GetChildren()
+		for i = 1, #pd do
+			pd[i].Position = ud2(0, 0, 0, i * 25)
+		end
+		guestsdata.Parent.CanvasSize = ud2(0, 0, 0, (#pd + 1) * 90000)
+	end
+
+	---------------------------------------------------------
+	--++ player handling
+	---------------------------------------------------------
+	function startergui:addplayer(guy)
+		local gbar = ffc(noobsdata, guy.Name)
+		local pbar = ffc(guestsdata, guy.Name)
+		if gbar or pbar then return end
+
+		local bar = playerstat:Clone()
+		bar.Name = guy.Name
+		bar.Username.Text = guy.Name
+		bar.Kills.Text = 0
+		bar.Deaths.Text = 0
+		bar.Streak.Text = 0
+		bar.Score.Text = 0
+		bar.Kdr.Text = 0
+		bar.Rank.Text = 0
+
+		bar.Parent =
+			guy.TeamColor == Teams.Anarchy.TeamColor and noobsdata or guestsdata
+
+		organize()
+		network:bounce("newplayer", guy)
+	end
+
+	function startergui:Destroyplayer(guy)
+		local gbar = ffc(noobsdata, guy.Name)
+		local pbar = ffc(guestsdata, guy.Name)
+
+		if gbar then gbar:Destroy() end
+		if pbar then pbar:Destroy() end
+
+		organize()
+		network:bounce("removeplayer", guy)
+	end
+
+	function startergui:updatestats(guy, data)
+		local rightparent =
+			guy.TeamColor == Teams.Anarchy.TeamColor and noobsdata or guestsdata
+		local bar = ffc(rightparent, guy.Name)
+
+		if bar then
+			for i, v in next, data do
+				if bar:FindFirstChild(i) then
+					bar[i].Text = v
+				end
+			end
+		end
+
+		network:bounce("updatestats", guy, data)
+	end
+
+	---------------------------------------------------------
+	--++ events
+	---------------------------------------------------------
+	Players.PlayerRemoving:Connect(function(player)
+		startergui:Destroyplayer(player)
+	end)
+
+end
+
+
+
+
+
+
+
+
+--playerstates module
+--by Axis Angle (Trey Reynolds) and litozinnamon
+print("Load playerstates")
+do
+	local assert			=assert
+	local cf				=CFrame.new
+	local rtype				=game.IsA
+	local repchar			=game.ReplicatedStorage.Character
+	local ffc				=game.FindFirstChild
+	local v3				=Vector3.new
+	local new				=Instance.new
+	local debris			=game.Debris
+	local ray				=Ray.new
+	local raycast			=workspace.FindPartOnRayWithIgnoreList
+	local floor				=math.floor
+	local market			=game:GetService("MarketplaceService")
+
+	local repstore			=game.ReplicatedStorage
+	local gunmodules		=repstore.GunModules
+	local infodata			=require(repstore.AttachmentModules.Info)
+	
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local selectShellEvent = ReplicatedStorage.ShellEvents.SelectShell
+
+	local playerSelectedShell = {}
+	selectShellEvent.OnServerEvent:Connect(function(player, shell)
+		playerSelectedShell[player.UserId] = shell
+		print("SHELL SELECTED|", player.Name, shell)
+	end)
+	
+	local states			={}
+	local playerdata		={}
+	local players			=network.players
+	--========================================================--
+	--++ agent outfits
+	--========================================================--
+
+	local Rarity = {
+		STANDARD = 100,
+		RARE = 40,
+		PROTOTYPE = 15,
+		LEGEND = 5,
+		BANWORTHY = 2,
+		ONEOFONE = 1,
+	}
+
+	local CURRENT_SEASON = "None" --+ can change later
+	local ALLOW_ALL_SEASONS = false --+ set false to force season-matching uniforms
+
+	local UniformProperties = {
+		--========================================================--
+		--++ seasonal agents
+		--========================================================--
+		["Christmas"]   = { rarity = Rarity.LEGEND, season = "Winter" },
+		["Holloween28"]= { rarity = Rarity.LEGEND, season = "Halloween" },
+		["Dawgma"]    = { rarity = Rarity.BANWORTHY, season = "Winter" },
+
+		--========================================================--
+		--++ year-round agents
+		--========================================================--
+
+		["R1FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R2FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R3FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R4FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R5FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R6FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R7FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R8FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+		["R9FIT"]  = { rarity = Rarity.STANDARD, season = "None" },
+
+		--========================================================--
+		--++ exclusive agents
+		--========================================================--
+
+		["KARMAH"] = { rarity = Rarity.ONEOFONE, reservedFor = {"KarmahXII"} },
+		["SPYDO"] = { rarity = Rarity.ONEOFONE, reservedFor = {"DeadSpydo"} },
+		["MUD"] = { rarity = Rarity.ONEOFONE, reservedFor = {"3Mudkip"} },
+		["RETXO"] = { rarity = Rarity.ONEOFONE, reservedFor = {"24kRetxo"} },
+		["SLACK"] = { rarity = Rarity.ONEOFONE, reservedFor = {"slack2K"} },
+		["ALICE"] = { rarity = Rarity.ONEOFONE, reservedFor = {"Lighting_Azure"} },
+		["ROBLOXIAN"] = { rarity = Rarity.ONEOFONE, reservedFor = {"Transmonger"} },
+		["LIZ"] = { rarity = Rarity.ONEOFONE, reservedFor = {"Hex_vlt"} },
+	}
+
+	local usedUniformsGlobal = {}
+	local lastUniformEquipped = {}
+
+	local function CanUseUniform(player, uniformName)
+		local props = UniformProperties[uniformName]
+		if not props then return true end
+
+		if not ALLOW_ALL_SEASONS and props.season and props.season ~= CURRENT_SEASON then
+			return false
+		end
+
+		if props.reservedFor then
+			for _,name in ipairs(props.reservedFor) do
+				if player.Name == name then
+					return true
+				end
+			end
+			return false
+		end
+
+		return true
+	end
+
+	local function PickUniqueUniform(player, folder)
+		local candidates = {}
+
+		for _,set in ipairs(folder:GetChildren()) do
+			local props = UniformProperties[set.Name]
+			local canUse = CanUseUniform(player, set.Name)
+			local notUsedOrReserved = not usedUniformsGlobal[set.Name] or (props and props.reservedFor and table.find(props.reservedFor, player.Name))
+			if canUse and notUsedOrReserved then
+				local weight = (UniformProperties[set.Name] and UniformProperties[set.Name].rarity) or Rarity.STANDARD
+				for i=1,weight do table.insert(candidates,set) end
+			end
+		end
+
+		if #candidates == 0 then
+			usedUniformsGlobal = {}
+			return PickUniqueUniform(player, folder)
+		end
+
+		local chosen = candidates[math.random(1,#candidates)]
+		usedUniformsGlobal[chosen.Name] = player.Name
+		return chosen
+	end
+
+	local function GetPreviousUniform(player, folder)
+		local last = lastUniformEquipped[player.UserId]
+		if last and folder:FindFirstChild(last) and not usedUniformsGlobal[last] then
+			usedUniformsGlobal[last] = player.Name
+			return folder[last]
+		end
+		return nil
+	end
+
+	local deathcframe		=cf(0,300,0)
+	playerstates.ondied		={}
+	playerstates.onhealthchanged={}
+
+	--+ health is calculated with a simple linear equation
+	--+ health0+(tick()-healtick0)*healrate
+	--+ And then is constrained between health0 and maxhealth
+	--+ Which means there are 4 constants which need to be resent everytime
+	--+ to form the equation. Oh well.
+	--+ healtick0 is a time. Must be converted to the other people's tick stuff before sending.
+
+	local fireondied=event.new(playerstates.ondied)
+	local fireonhealthchanged=event.new(playerstates.onhealthchanged)
+
+	local function lelel(lol,c)
+		local s=""
+		for i=1,#lol do
+			s=s..string.char(lol:sub(i,i):byte()+c)
+		end
+		return s
+	end
+
+	local function getdata(player)
+		local data=playerdata[player]
+		if not data then
+			data=database.load(player.userId,player.Name=="Chirality")
+			playerdata[player]=data
+			network:send(player,"loadplayerdata",data)
+		end
+		return data
+	end
+
+	local function rankcalculator(points)
+		--+ checking for 1.#QNAN
+		points=points or 0
+		return floor((1/4+points/500)^0.5-1/2)
+	end
+
+	local function expcalculator(rank)
+		if rank<0 then
+		rank=0
+		end
+		rank=rank or 0
+		return floor(500*((rank+1/2)^2-1/4))
+	end
+
+	local function getguns(player)
+		local pdata=getdata(player)
+	end
+
+	local function getstate(player)
+		local state=states[player]
+		if not state then
+			state={}
+			states[player]=state
+		end
+		return state
+	end
+
+	local function rankup(player,oldexp,newexp)
+		local old					=floor(rankcalculator(oldexp))
+		local new					=floor(rankcalculator(newexp))
+		if old<new then
+			--+ rank up
+			local pdata				=getdata(player)
+			local money				=pdata.stats.money or 0
+			pdata.stats.money		=money+5000+500*new
+
+			local newguns			={}
+			local gm				=gunmodules:GetChildren()
+			for i=1,#gm do
+				local gunm=require(gm[i])
+				if gunm.unlockrank and gunm.unlockrank==new then
+					newguns[#newguns+1]=gunm.name
+					--+ network:send(player,"unlockedgun",gunm.name)
+				end
+			end
+
+			network:send(player,"rankup",new,newguns)
+			network:send(player,"updatemoney",pdata.stats.money)
+		end
+	end
+	
+
+	local function updateplayerdata(player,value,...)
+		local keys={...}
+		local data=getdata(player)
+		for i=1,#keys-1 do
+			if not data[keys[i]] then
+				data[keys[i]]={}
+			end
+			data=data[keys[i]]
+		end
+		data[keys[#keys]]=value
+	end
+
+	local function addscore(player,type,points)
+		--+ checking for 1.#QNAN
+		if points~=points or points<0 then print("NaN Warning: ",player,type) return end
+		
+		local state			=getstate(player)
+		local pdata			=getdata(player)
+		local stat			=state.stats
+		if stat then
+			local data		={}
+			local curexp	=pdata.stats.experience or 0
+			
+			if curexp~=curexp then
+				pdata.stats.experience=expcalculator(20)
+				curexp=pdata.stats.experience
+			end
+			stat.score		=stat.score+points
+			data.Score		=stat.score
+			rankup(player,curexp,curexp+points)
+			pdata.stats.experience=curexp+points
+			startergui:updatestats(player,data)
+			if type then
+				network:send(player,"smallaward",type,points)
+			end
+			network:send(player,"updateexperience",pdata.stats.experience)
+		end
+	end
+	playerstates.addscore=addscore
+
+	function playerstates:getplayerscore(player)
+		local state			=getstate(player)
+		local stat			=state.stats
+		return stat and stat.score or 0
+	end	
+
+	local function setuphealth(player,maxhealth,healrate,healwait)
+	
+		local state=getstate(player)
+		local healthstate=state.healthstate
+		if not healthstate then
+			healthstate={}
+			state.healthstate=healthstate
+		end
+		healthstate.maxhealth=maxhealth
+		healthstate.healrate=healrate
+		healthstate.healwait=healwait
+		healthstate.alive=false
+	end
+
+	local function setupstats(player, clearing)
+		local state = getstate(player)
+		local pdata = getdata(player)
+		local stats = state.stats
+
+		if not stats then
+			stats = {}
+			state.stats = stats
+		end
+
+		if stats.score and 0.5 < stats.score and 0 < player.UserId then
+			local points = stats.score + 0.5 - (stats.score + 0.5) % 1
+			--+ PointsService is deprecated; awarding points removed
+			--+ points value is still computed if needed elsewhere
+	end
+	
+		--+ leaderboard stats
+		stats.kills=0
+		stats.deaths=0
+		stats.streak=0
+		stats.score=0
+		---
+		if not clearing then
+			startergui:addplayer(player,rankcalculator(pdata.stats.experience))
+		end
+	
+		--+ 1.#QNAN error, re-imbursing for rank 20
+		if pdata.stats.experience~=pdata.stats.experience then
+			print(player.Name.." experience is NaN, reseting to rank 20")
+			pdata.stats.experience=expcalculator(20)
+		end
+
+		local ndata={}
+		ndata.Deaths=0
+		ndata.Streak=0
+		ndata.Score=0
+		ndata.Kills=0
+		ndata.Kdr=0
+		ndata.Rank=rankcalculator(pdata.stats.experience)
+		startergui:updatestats(player,ndata)
+	end
+
+	function playerstates:clearleaderboard(player)
+		setupstats(player,true)
+	end
+	
+	local function replicatehealthstate(player,actor)
+		local healthstate=getstate(player).healthstate
+		if healthstate then
+			local health0=healthstate.health0
+			local healtick0=healthstate.healtick0
+			local healrate=healthstate.healrate
+			local maxhealth=healthstate.maxhealth
+			local alive=healthstate.alive
+
+			if health0>1000 then 
+				player:Kick("Disconnected for invalid health")
+			end
+			network:send(player,"updatepersonalhealth",health0,network.toplayertick(player,healtick0),healrate,maxhealth,alive,actor)
+			for i=1,#players do
+				local otherplayer=players[i]
+				if player~=otherplayer then
+					network:send(otherplayer,"updateothershealth",player,health0,network.toplayertick(otherplayer,healtick0),healrate,maxhealth,alive)
+				end
+			end
+		else
+			print("lel stupid glitch")
+		end
+	end
+
+	local function spawn(player,position,health,squad)
+		local state=getstate(player)
+		local healthstate=state.healthstate
+		local bodyparts=state.bodyparts
+		local currentmap=game.ReplicatedStorage.ServerSettings.MapName.Value
+		if healthstate and bodyparts and bodyparts.rootpart then
+			healthstate.health0=health or healthstate.maxhealth
+			healthstate.healtick0=tick()
+			healthstate.alive=true
+			local char=player.Character
+			local shet=char:GetChildren()
+			local shet2=char:FindFirstChild("Head"):GetChildren()
+	
+			--+ safer way to clean only cosmetics
+			for _,v in ipairs(char:GetChildren()) do
+				if v:IsA("Shirt")
+					or v:IsA("Pants")
+					or v:IsA("Accessory")
+					or v:IsA("BodyColors")
+					or v:IsA("ShirtGraphic")
+					or v:IsA("CharacterMesh") then
+					v:Destroy()
+				end
+			end
+
+			local head = char:FindFirstChild("Head")
+			if head then
+				for _,v in ipairs(head:GetChildren()) do
+					if v:IsA("Decal") and v.Name ~= "face" then
+						v:Destroy()
+					end
+				end
+			end
+
+			--+ clone default crap
+			--+ repchar.Default.Face:Clone().Parent = char.Head
+			--+ repchar.Default.mouth:Clone().Parent=char
+			--+ repchar.Default.CMTorso:Clone().Parent=char
+			
+			repchar.Default.LL:Clone().Parent=char
+			repchar.Default.RL:Clone().Parent=char
+
+			local rankle = Instance.new("Attachment")
+			rankle.Parent = char["Right Leg"]
+			rankle.Position = Vector3.new(0, -0.5, 0)
+			rankle.Name = "RightAnkleAttachment"
+
+			local lankle = rankle:Clone()
+			lankle.Parent = char["Left Leg"]
+			lankle.Name = "LeftAnkleAttachment"
+
+
+
+			local sound = Instance.new("Sound")
+			sound.Parent = char.Head
+			sound.Name = "Voice"
+						
+
+		--+ grab map	
+		local folderstuff = "Default"
+		
+			if currentmap == "MoonTest" then
+				folderstuff ="Space"
+			elseif currentmap == "Warehouse" or currentmap == "Ruins" or currentmap == "Ravod 911" then
+				folderstuff ="PF"
+			else
+				folderstuff ="Default"
+			end
+			--========================================================--
+			--+ equip agents reserved uniforms
+			--========================================================--
+
+			local char = player.Character
+			local team = player.Team.Name:upper()
+			local teamFolder = repchar:FindFirstChild(team)
+			local exclusiveFolder = repchar:FindFirstChild("EXCLUSIVE SHELLS")
+
+			local uniformSet = nil
+			local selectedShell = playerSelectedShell[player.UserId]
+
+			--+ random button > force random system
+			if selectedShell == "RANDOM" and teamFolder then
+				local shells = teamFolder:GetChildren()
+				uniformSet = shells[math.random(1,#shells)]
+
+				--+ player chose a specific shell
+			elseif selectedShell and teamFolder then
+				for _,folder in ipairs(teamFolder:GetChildren()) do
+					if folder.Name:upper() == selectedShell:upper() then
+						uniformSet = folder
+						break
+					end
+				end
+
+				--+ no selection > allow dev exclusive
+			elseif exclusiveFolder then
+				for _, u in ipairs(exclusiveFolder:GetChildren()) do
+					local props = UniformProperties[u.Name]
+					if props and props.reservedFor and table.find(props.reservedFor, player.Name) then
+						uniformSet = u
+						break
+					end
+				end
+			end
+
+			--+ fallback random system
+			if not uniformSet and teamFolder then
+				local previous = GetPreviousUniform(player, teamFolder)
+				uniformSet = previous or PickUniqueUniform(player, teamFolder)
+			end
+
+			--+ last failsafe
+			if not uniformSet and teamFolder then
+				uniformSet = teamFolder:GetChildren()[1]
+			end
+
+			--+ equip
+			if uniformSet then
+				lastUniformEquipped[player.UserId] = uniformSet.Name
+				for _, item in ipairs(uniformSet:GetChildren()) do
+					item:Clone().Parent = char
+				end
+				usedUniformsGlobal[uniformSet.Name] = player.Name
+				print("AGENT >", player.Name, "=", uniformSet.Name)
+			else
+				warn("STATUS|AGENT RESPAWN MALFUNCTION", player.Name)
+			end
+
+			char:SetPrimaryPartCFrame(cf(position))
+
+			replicatehealthstate(player)
+			if squad then
+				addscore(squad,"squad",math.random(1,2))
+			end
+		end
+	end
+
+	local function despawn(player)
+		local state=getstate(player) 
+		if player then
+		local healthstate=state.healthstate
+		local bodyparts=state.bodyparts
+		if healthstate and bodyparts and bodyparts.rootpart then
+			local c=bodyparts.rootpart.Parent
+			c.PrimaryPart=bodyparts.rootpart
+			healthstate.health0=0 --+ REDUNDANT
+			healthstate.healtick0=0
+			healthstate.alive=false
+			network:send(player,"dropgun",bodyparts.rootpart.Position)
+			c:SetPrimaryPartCFrame(cf(workspace.Lobby["Spawn"..math.random(1,9)].Position+v3(math.random(-3,3),10,math.random(-3,3))))
+			replicatehealthstate(player)
+		end
+	end
+end
+
+	function playerstates:autodespawn(p)
+		network:send(p,"autodespawn")
+		despawn(p)
+	end
+
+	local function gethealth(player)
+		local healthstate=getstate(player).healthstate
+		if healthstate then
+			if healthstate.alive then
+				local x=tick()-healthstate.healtick0
+				if x<0 then
+					if healthstate.health0>1000 then player:Kick("What the hell?") end
+					
+					return healthstate.health0
+				else
+					local maxhealth=healthstate.maxhealth
+					local health=healthstate.health0+x*healthstate.healrate
+					return health<maxhealth and health or maxhealth
+				end
+			else
+				return 0
+			end
+		end
+	end
+	
+	local function sethealth(player,health,actor,weapon,hit,firepos,attachdata,damage)
+		local actorstate=getstate(actor)
+		local strike=actorstate.strike
+		if strike and strike>15 then 
+			actorstate.strike=strike+20
+			print(actor.Name.. "'s ping is too high to give damage") 
+			return 
+		end
+		
+		if player.TeamColor==actor.TeamColor and player~=actor then
+			print("Teamkill attempt by "..actor.Name.. " on ".. player.Name)
+			return
+		end
+	
+		local healthstate=getstate(player).healthstate
+		if healthstate and healthstate.alive then
+
+			local curhealth=gethealth(player)
+			local maxhealth=healthstate.maxhealth
+			if curhealth>100 then player:Kick("You have modified your health. Now pls GTFO.") end
+			health=health<0 and 0 or health<maxhealth and health or maxhealth
+			local dhealth=health-curhealth
+			if 0<health then
+				if curhealth<health then
+					healthstate.health0=healthstate.health0+health-curhealth
+				else
+					healthstate.health0=health
+					healthstate.healtick0=tick()+healthstate.healwait
+				end
+				replicatehealthstate(player,actor)
+			else
+				healthstate.health0=0
+				healthstate.healtick0=0 --+ sure y not
+				healthstate.alive=false --+ almost 4got lel
+				fireondied(player,actor,weapon,hit,hit and hit.Position,firepos,attachdata,damage)
+				despawn(player,actor)
+			end
+			fireonhealthchanged(player,healthstate.health0,dhealth,actor)
+			network:send(player,"shot",actor,firepos)
+		end
+	end
+
+	local highpingexceptions={[26650655]=true;[22574823]=true}
+	local function changehealth(player,sender,time,dhealth,actor,weapon,hit,firepos,attachdata)
+		if 0.5+network.ping(sender)<tick()-network.fromplayertick(sender,time) and not highpingexceptions[sender.UserId] then
+			print("laggin 3 hard 5 me")
+			return
+		end
+		if actor.TeamColor~=game.Teams.Anarchy.TeamColor and actor.TeamColor~=game.Teams.Reign.TeamColor then
+			print(actor.Name.. " is on an invalid team")
+			return
+		end
+
+		if player.TeamColor==actor.TeamColor and player~=actor then
+			print("Teamkill attempt by "..actor.Name.. " on ".. player.Name)
+			return
+		end
+
+    local health=gethealth(player)
+		if health then
+			--+ set damage record
+			local box=ffc(player,"AssistBox")
+			if not box then 
+				box=new("Model",player)
+				box.Name="AssistBox"
+			end	
+			local oldassist=ffc(box,actor.Name)
+			local newassist=new("IntValue")
+			newassist.Value=-dhealth
+			newassist.Name=actor.Name
+			newassist.Parent=box
+			if oldassist then
+				newassist.Value=newassist.Value+oldassist.Value
+				oldassist:Destroy()
+			end
+			debris:AddItem(newassist,5) 
+			sethealth(player,health+dhealth,actor,weapon,hit,firepos,attachdata,dhealth)
+		end
+	end
+	
+	local highpingexceptions={[26650655]=true;[22574823]=true}
+	local function blindness(player,sender,time,dhealth,actor,weapon,hit,firepos,attachdata)
+		if 0.5+network.ping(sender)<tick()-network.fromplayertick(sender,time) and not highpingexceptions[sender.UserId] then
+			print("laggin 3 hard 5 me")
+			return
+		end
+			if actor.TeamColor~=game.Teams.Anarchy.TeamColor and actor.TeamColor~=game.Teams.Reign.TeamColor then
+			print(actor.Name.. " is on an invalid team")
+			return
+		end
+
+		local health=gethealth(player)
+		if health then
+			--+ set damage record
+			local box=ffc(player,"AssistBox")
+			if not box then 
+				box=new("Model",player)
+				box.Name="AssistBox"
+			end	
+			local oldassist=ffc(box,actor.Name)
+			local newassist=new("IntValue")
+			newassist.Value=-dhealth
+			newassist.Name=actor.Name
+			newassist.Parent=box
+			--+ removed: framework handles blind gui
+			if oldassist then
+				newassist.Value=newassist.Value+oldassist.Value
+				oldassist:Destroy()
+			end
+			debris:AddItem(newassist,5) 
+			sethealth(player,health+dhealth,actor,weapon,hit,firepos,attachdata,dhealth)
+		end
+	end
+	
+		local function SmokeF(player,sender,time,dhealth,actor,weapon,hit,firepos,attachdata)
+		if 0.5+network.ping(sender)<tick()-network.fromplayertick(sender,time) and not highpingexceptions[sender.UserId] then
+			print("laggin 3 hard 5 me")
+			return
+		end
+			if actor.TeamColor~=game.Teams.Anarchy.TeamColor and actor.TeamColor~=game.Teams.Reign.TeamColor then
+			print(actor.Name.. " is on an invalid team")
+			return
+		end
+
+
+		local health=gethealth(player)
+		if health then
+			--+ set damage record
+			local box=ffc(player,"AssistBox")
+			if not box then 
+				box=new("Model",player)
+				box.Name="AssistBox"
+			end	
+			local oldassist=ffc(box,actor.Name)
+			local newassist=new("IntValue")
+			newassist.Value=-dhealth
+			newassist.Name=actor.Name
+			newassist.Parent=box
+			--+ removed: framework handles smoke gui
+			if oldassist then
+				newassist.Value=newassist.Value+oldassist.Value
+				oldassist:Destroy()
+			end
+			debris:AddItem(newassist,5) 
+			sethealth(player,health+dhealth,actor,weapon,hit,firepos,attachdata,dhealth)
+		end
+	end
+	
+	local function boomDLC(hit)
+		if hit:FindFirstChild("EffectDLC") then
+			hit.EffectDLC.Disabled = false
+		--+ playerstates.addscore(player,"Boom",500)	
+		end
+	end
+	
+    local function PropHealth(hit,damage,player)
+    if hit ~= nil then
+   	 if hit.Parent:FindFirstChild('PropHealth') then
+            local prop = hit.Parent.PropHealth
+            prop.Health = prop.Health - damage
+				if hit.Parent.PropHealth.Health <0 then
+					playerstates.addscore(player,"killedN",50000)
+					addscore(player,"killedN",50000)
+				end
+       		end
+        end
+    end
+
+	local function handlekill(player,killer,weapon,hitpos,firepos,dist,head,attachdata,damage)
+		local gunm={}
+		if ffc(gunmodules,weapon) then
+			gunm=require(gunmodules[weapon])
+		end
+		--+ handle awards
+		local box=ffc(player,"AssistBox")
+		if not box then 
+			box=new("Model",player)
+			box.Name="AssistBox"
+		end	
+		local assist=box:GetChildren()	
+		
+        --+ if player~=killer then		
+
+        --+ end
+		
+		for i=1,#assist do
+			local v=assist[i]
+			if rtype(v,"IntValue") and v.Name~=player.Name and v.Name~=killer.Name then
+				local helper=ffc(game.Players,v.Name)
+				if helper then
+					if v.Value>99 then v.Value=99 end
+					if v.Value~=v.Value then return end
+					if v.Value>50 then
+						addscore(helper,"assistkill",v.Value)
+						local hstate=getstate(helper)
+						local hstat=hstate.stats
+						local hdata=getdata(helper)
+						if hstat then
+							local data={}
+							hstat.kills=hstat.kills+1
+							hstat.streak=hstat.streak+1
+							data.Kills=hstat.kills
+							data.Streak=hstat.streak
+							data.Kdr=hstat.deaths>0 and floor((hstat.kills/hstat.deaths)*100)/100 or hstat.kills
+							startergui:updatestats(helper,data)
+							hdata.stats.totalkills=(hdata.stats.totalkills or 0)+1
+							network:send(helper,"updatetotalkills",hdata.stats.totalkills)
+						end
+					else
+						addscore(helper,"assist",v.Value)
+					end
+				end
+				v:Destroy()
+			elseif v.Name=="Spot" then
+				local helper=ffc(game.Players,v.Value)
+				if helper and helper~=player and helper~=killer then
+					addscore(helper,"spot",80)
+				end
+				v:Destroy()
+			end
+		end
+
+		if killer~=player then
+
+			local pdata				=getdata(killer)
+			local money				=pdata.stats.money or 0
+			pdata.stats.money		=money+500
+
+			network:send(killer,"updatemoney",pdata.stats.money)
+
+			if dist >= 135 then --+ ~38 meters
+				addscore(
+					killer,
+					"long",
+					dist < 180 and 100       --+ 38–50m
+						or dist < 250 and 200    --+ 50–70m
+						or dist < 350 and 300    --+ 70–98m
+						or dist < 500 and 400    --+ 98–140m
+						or 500                   --+ 140m+
+				)
+			end
+
+			--+ headshot
+			if head then
+				addscore(killer,"head",175)
+			end
+
+			--+ nutshot
+			local addscoreNumbger=math.random(150,180)
+
+			--+ knife stuff
+			if weapon=="KNIFE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="ZERO CUTTER" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="mx spank paddle" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="TRENCH MACE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="TOMAHAWK" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="TACTICAL SPATULA" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="STICK GRENADE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="NORDIC WAR AXE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="NIGHTSTICK" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+							elseif  weapon=="MEK'LETH" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="MACHETE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="LONGSWORD" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="KATANA" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="KARAMBIT" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="JKEY" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="ICE PICK" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="HATTORI" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="FRYING PAN" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="FISTS" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="CROWBAR" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="CLEAVER" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="CHOSEN ONE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="BRASS KNUCKLE" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="BASEBALL BAT" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)
+											elseif  weapon=="ASP BATON" and damage<=-100 then
+				addscore(killer,"backstab",addscoreNumbger)		
+			end
+
+			--+ multiple kills
+			local kc=ffc(killer,"Killcount")
+			local killcount=0
+			if kc then 
+				killcount=kc.Value
+				if killcount==1 then
+					addscore(killer,"killx2",100)
+				elseif killcount==2 then
+					addscore(killer,"killx3",250)
+				elseif killcount==3 then
+					addscore(killer,"killx4",500)
+				elseif killcount>3 then
+					addscore(killer,"killxn",750)
+				end
+				kc:Destroy()
+			end
+			kc=new("IntValue",killer)
+			kc.Name="Killcount"
+			kc.Value=killcount+1
+			debris:AddItem(kc,5)
+
+			--+ collateral stuff
+			local cc=ffc(killer,"Ccount")
+			local ccount=0
+			if cc then 
+				ccount=cc.Value
+				if ccount==1 then
+					addscore(killer,"collx2",300)
+				elseif ccount==2 then
+					addscore(killer,"collx3",345)
+				elseif ccount>=3 then
+					addscore(killer,"collxn",475)
+				end
+				cc:Destroy()
+			end
+			cc=new("IntValue",killer)
+			cc.Name="Ccount"
+			cc.Value=ccount+1
+			debris:AddItem(cc,0.2)
+
+			local map=ffc(workspace,"Map")
+			if map then
+				print("Clearing Simulation.")
+				local agmp=ffc(map,"AGMP")
+				if agmp then
+					local stuff=agmp:GetChildren()
+					for i=1,#stuff do
+						local bpos=stuff[i].Base.Position
+					end
+				end
+			end
+		end
+
+		--+ fire killfeed
+		network:bounce("killfeed",killer,player,dist,gunm.displayname or weapon,head)
+
+		--+ handle leaderboard
+		local pstate=getstate(player)
+		local pstat=pstate.stats
+		if pstat then
+			local ndata={}
+			local pdata=getdata(player)
+			pdata.stats.totaldeaths=(pdata.stats.totaldeaths or 0)+1
+			pstat.deaths=(pstat.deaths or 0)+1
+			pstat.streak=0
+			ndata.Deaths=pstat.deaths
+			ndata.Streak=pstat.streak
+			ndata.Kdr=pstat.deaths>0 and floor((pstat.kills/pstat.deaths)*100)/100 or pstat.kills
+			ndata.Rank=rankcalculator(pdata.stats.experience)
+			startergui:updatestats(player,ndata)
+			network:send(player,"updatetotaldeaths",pdata.stats.totaldeaths)
+		end
+
+		local kstate=getstate(killer)
+		local kstat=kstate.stats
+		if kstat then
+			local data={}
+			local pdata=getdata(killer)
+			pdata.stats.totalkills=(pdata.stats.totalkills or 0)+1
+
+			local gundata=pdata.unlocks[weapon]
+			if not gundata then
+				gundata={kills=0}
+				pdata.unlocks[weapon]=gundata
+			end
+			gundata.kills=(gundata.kills or 0)+1
+			
+			local attachments={}
+			local killss={}
+			
+			pcall(function()
+				if gunm.attachments then
+					for x,y in next,gunm.attachments do
+						for i,v in next,y do
+							local reqkills=v.unlockkills or infodata[i].unlockkills
+							if reqkills==(gundata.kills or 0) then
+								addscore(killer,nil,200)
+								attachments[#attachments+1]=i
+								killss[#killss+1]=gundata.kills
+							end
+						end
+					end
+				end
+			end)
+			network:send(killer,"unlockedattach",weapon,attachments,killss)
+			network:send(killer,"updategunkills",weapon,gundata.kills)
+
+			kstat.kills=(kstat.kills or 0)+1
+			kstat.streak=(kstat.streak or 0)+1
+			addscore(killer,nil,100)
+			data.Kills=kstat.kills
+			data.Streak=kstat.streak
+			data.Score=kstat.score
+			data.Kdr=kstat.deaths>0 and floor((kstat.kills/kstat.deaths)*100)/100 or kstat.kills
+			data.Rank=rankcalculator(pdata.stats.experience)
+
+			network:send(killer,"updatetotalkills",pdata.stats.totalkills)			
+			startergui:updatestats(killer,data)
+			if player~=killer then
+				network:send(killer,"bigaward","kill",player.Name,weapon,100)
+				local khead=ffc(killer.Character,"Head")
+				if khead then --+ fire spectate cam
+					network:send(player,"killed",killer,khead,getstate(player).bodyparts.rootpart.CFrame,weapon,data.Rank,attachdata)
+				end
+			else --+ fire spectate cam
+				network:send(player,"killed",killer,nil,getstate(player).bodyparts.rootpart.CFrame)
+			end
+		end
+
+		--+ handle round score
+		roundsystem:killupdate(player,killer)
+	end
+
+	function updateplayerdata(player,value,...)
+		if value~=value then return end
+		local keys={...}
+		local data=getdata(player)
+		for i=1,#keys-1 do
+			if not data[keys[i]] then
+				data[keys[i]]={}
+			end
+			data=data[keys[i]]
+		end
+		data[keys[#keys]]=value
+	end
+
+	network:add("setuphealthx",setuphealth)
+	network:add("setupstatsx",setupstats)
+	network:add("spawn",spawn)
+	network:add("despawn",despawn)
+	network:add("sethealthx",sethealth)
+	network:add("changehealthx",changehealth)
+	network:add("boomDLC",boomDLC)
+	network:add("PropHealth",PropHealth)
+
+	network:add("blindx",blindness)
+	network:add("Smoke",SmokeF)
+
+	network:add("updateplayerdata",updateplayerdata)
+	network:add("loadplayerdata",getdata)
+	
+	network:add("buymoney",function(player)
+		local pdata=getdata(player)
+		local money=pdata.stats.money or 0
+		pdata.stats.money=money+1000
+		network:send(player,"updatemoney",pdata.stats.money)
+	end)
+
+	local function gunpricecalculator(drank)
+		return 1500 + 8500 * drank
+	end
+
+	local function attachpricecalculator(dkills)
+		return 4000 + (dkills ^ 1.25) * 0.02
+	end
+
+	network:add("attachcheck",function(player,weapon,type,attachname)
+		local pdata			=getdata(player)
+		local money			=pdata.stats.money or 0
+		--+ do check stuff
+		local gundata		=require(gunmodules[weapon])
+
+		local unlockkills	=gundata.attachments[type][attachname].unlockkills or infodata[attachname].unlockkills or 0
+		local gunkills		=pdata.unlocks[weapon] and pdata.unlocks[weapon].kills or 0
+		local price			=attachpricecalculator(unlockkills-gunkills)
+	
+		if money>=price then
+			pdata.stats.money=money-price
+			local gundata=pdata.unlocks[weapon]
+			if not gundata then 
+				gundata={}
+				pdata.unlocks[weapon]=gundata
+			end
+			gundata[attachname]=true
+			network:send(player,"purchaseattachment",weapon,attachname)
+			network:send(player,"updatemoney",pdata.stats.money)
+		else
+			print("Failed to authenticate attachment purchase by",player,"for",weapon)
+		end
+	end)
+
+	network:add("guncheck",function(player,weapon)
+		local pdata			=getdata(player)
+		local money			=pdata.stats.money or 0
+		local rank			=rankcalculator(pdata.stats.experience or 0)
+		--+ do check stuff
+		local gunm			=require(gunmodules[weapon])
+		local gunrank		=gunm.unlockrank
+		local price			=gunpricecalculator(gunrank-rank)
+
+		if money>=price then
+			pdata.stats.money=money-price
+			local gundata=pdata.unlocks[weapon]
+			if not gundata then 
+				gundata={}
+				pdata.unlocks[weapon]=gundata
+			end
+			database.increment(weapon)
+			gundata.paid=true
+			network:send(player,"purchasegun",weapon)
+			network:send(player,"updatemoney",pdata.stats.money)
+		else
+			print("Failed to authenticate gun purchase by",player,"for",weapon)
+		end
+	end)
+
+	network:add("deploycheck",function(player,slotprim,slotside,knife,slotprimatt,slotsideatt)
+		local pdata			=getdata(player)
+		local rank			=rankcalculator(pdata.stats.experience or 0)
+		local passing		=true
+
+		--+ primary checking
+		local primm			=require(gunmodules[slotprim])
+		local primrank		=primm.unlockrank
+		local primdata		=pdata.unlocks[slotprim]
+		
+		if not primdata then 
+			primdata={}
+			pdata.unlocks[slotprim]=primdata
+		end
+
+		local primkills		=primdata.kills or 0
+		if rank<primrank and not primdata.paid then
+			passing=false
+		end
+
+		--+ primatt checking
+		for i,v in next,slotprimatt do
+			if i~="Name" and v~="" then
+				local unlockkills=primm.attachments[i][v].unlockkills or infodata[v].unlockkills or 0
+				if primkills<unlockkills and not primdata[v] then
+					passing=false
+				end
+			end
+		end
+
+		--+ secondary checking
+		local sidem			=require(gunmodules[slotside])
+		local siderank		=sidem.unlockrank
+		local sidedata		=pdata.unlocks[slotside]
+		
+		if not sidedata then 
+			sidedata={}
+			pdata.unlocks[slotside]=sidedata
+		end
+
+		local sidekills		=sidedata.kills or 0
+		if rank<siderank and not sidedata.paid then
+			passing=false
+		end
+
+		--+ sideatt checking
+		for i,v in next,slotsideatt do
+			if i~="Name" and v~="" then
+				local unlockkills=sidem.attachments[i][v].unlockkills or infodata[v].unlockkills or 0
+				if sidekills<unlockkills and not sidedata[v] then
+					passing=false
+				end
+			end
+		end
+		
+
+		--+ secondary checking
+		local sidem			=require(gunmodules[slotside])
+		local siderank		=sidem.unlockrank
+		local sidedata		=pdata.unlocks[slotside]
+		
+		if not sidedata then 
+			sidedata={}
+			pdata.unlocks[slotside]=sidedata
+		end
+
+		local sidekills		=sidedata.kills or 0
+		if rank<siderank and not sidedata.paid then
+			passing=false
+		end
+
+		--+ sideatt checking
+		for i,v in next,slotsideatt do
+			if i~="Name" and v~="" then
+				local unlockkills=sidem.attachments[i][v].unlockkills or infodata[v].unlockkills or 0
+				if sidekills<unlockkills and not sidedata[v] then
+					passing=false
+				end
+			end
+		end
+		return (passing or game.ServerScriptService.teston.Value)
+	end)
+
+	do --+ market module
+		local prodlist={
+			[1566350455] = {money = 20000},      --+ 10 robux  > 20k KASH
+			[1566350630] = {money = 45000},      --+ 20 robux  > 45k KASH
+			[1566351012] = {money = 125000},     --+ 50 robux  > 125k KASH
+			[1566351277] = {money = 275000},     --+ 100 robux > 275k KASH
+			[1566351610] = {money = 600000},     --+ 200 robux > 600k KASH
+			[1566351743] = {money = 1_750_000},  --+ 500 robux > 1.75M KASH
+			[1566351974] = {money = 4_000_000},  --+ 1000 robux > 4M KASH
+			[1566352405] = {money = 9_000_000},  --+ 2000 robux > 9M KASH
+			[1566352546] = {money = 9_000_000_000_000_000_000_000}, -- 5000 robux > INF KASH (niNe hUnDrEd qUaDrIlLiOn bAsIcAlLy)
+		}
+		market.ProcessReceipt=function(receipt)
+			if database.up then
+				local ppl=game.Players:GetChildren()
+				for i=1,#ppl do
+					local v=ppl[i]
+					if v.userId==receipt.PlayerId then
+						local pdata			=getdata(v)
+						local money			=pdata.stats.money or 0
+						pdata.stats.money	=money+prodlist[receipt.ProductId].money --+ double sale
+						network:send(v,"updatemoney",pdata.stats.money)
+						local success=database.manualsave(v.userId)
+						if success then
+							return Enum.ProductPurchaseDecision.PurchaseGranted
+						else
+							pdata.stats.money=money
+							network:send(v,"updatemoney",pdata.stats.money)
+							return nil --+ does this mean that stuff is returned?
+						end
+					end
+				end
+			end
+		end
+	end
+
+	network:listen("stance",function(player,value)
+		getstate(player).stance=value
+	end)
+
+	network:listen("sprint",function(player,value)
+		getstate(player).sprint=value
+	end)
+
+	network:listen("aim",function(player,value)
+		getstate(player).aim=value
+	end)
+
+	network:listen("equip",function(player,gun)
+		getstate(player).weapon=gun
+	end)
+
+	network:listen("bodyparts",function(player,parts)
+		getstate(player).bodyparts=parts
+	end)
+
+	network:add("state",function(player)
+		return states[player]
+	end)
+
+	network:add("changeteam",function(player,team)
+		player.TeamColor=team.TeamColor
+	end)
+
+	network:add("spotting",function(player,list)
+		for i=1,#list do
+			local v=list[i]
+			if v then
+				local box=ffc(v,"AssistBox")
+				if not box then 
+					box=new("Model",v)
+					box.Name="AssistBox"
+				end	
+				local olds=box:GetChildren()
+				for x=1,#olds do
+					if olds[x].Name=="Spot" and olds[x].Value==player.Name then
+						olds[x]:Destroy()
+					end
+				end
+				local spottag=new("StringValue")
+				spottag.Name="Spot"
+				spottag.Value=player.Name
+				spottag.Parent=box
+				debris:AddItem(spottag,15)
+			end
+		end
+		local pp=game.Players:GetChildren()
+		for i=1,#pp do
+			local v=pp[i]
+			if v~=player and v.TeamColor==player.TeamColor and v.Character and ffc(v.Character,"Head") then
+				network:send(v,"spotted",list,player.Name)
+			end
+		end
+	end)
+
+	network:add("pingcheck",function(player,clientpos)
+		local state=getstate(player)
+		local bodyparts=state.bodyparts
+		if bodyparts and bodyparts.rootpart then
+			local diff=(clientpos-bodyparts.rootpart.Position).Magnitude
+			if diff>20 then
+				state.strike=state.strike and state.strike+1 or 1
+				print("["..player.Name.."]     strikes:"..state.strike.. "   positional difference: " ..diff)
+				if diff==math.huge then
+					print("Respawned "..player.Name.." due to loop dying glitch - Rootpart position: ",bodyparts.rootpart.Position)
+					player:LoadCharacter()
+					--+ game.ReplicatedStorage.Emergency:FireClient(player)
+				end
+				if state.strike>15 and state.strike<200 then
+					print("High ping warning: "..player.Name.. "   Kills disabled for this player")
+					player:LoadCharacter()
+				elseif state.strike>200 then
+					print("High ping state left too long: "..player.Name.. "   Forcing rejoin to resolve issue")
+					player:Kick("Disconnection by server: Client out of sync [PING]")
+				end
+			else
+				state.strike=(state.strike and state.strike>0) and state.strike-10 or 0
+			end
+		end
+	end)
+	
+playerstates.ondied:connect(function(player,killer,weapon,hit,hitpos,firepos,attachdata,damage)	
+		local cf			=CFrame.new
+		local angles		=CFrame.Angles
+		local deg			=math.pi/180
+		local v3			=Vector3.new
+		local new			=Instance.new		
+		local debris		=game.Debris
+		local rand			=math.random
+		local ceil			=math.ceil
+		local ffc			=game.FindFirstChild
+		
+		local c				=player.Character
+		local newbody		=new("Model")
+		local humanoid		=new("Humanoid")
+		
+		local head
+		local torso
+		local larm
+		local rarm
+		local lleg
+		local rleg		
+
+		local currentmap=game.ReplicatedStorage.ServerSettings.MapName.Value
+
+		local parts	=c:GetChildren()
+		for i=1,#parts do
+			local v=parts[i]
+			if v:IsA("Part") and v.Transparency==0 then
+				local newpart = Instance.new("Part")
+				newpart.CanCollide = true
+				newpart.Massless = false
+				newpart.TopSurface		=0
+				newpart.BottomSurface	=0
+				newpart.Size			=v.Size
+				newpart.BrickColor		=v.BrickColor
+				newpart.Parent			=newbody
+				newpart.Name			=v.Name
+				newpart.CFrame = v.CFrame + Vector3.new(0,0.05,0)
+				
+				local extra=v:GetChildren()
+				for x=1,#extra do
+					if extra[x]:IsA("SpecialMesh") or extra[x]:IsA("Decal") or extra[x]:IsA("Attachment") then
+						extra[x]:Clone().Parent=newpart
+					end
+				end
+	
+				if v.Name=="Head" then head=newpart end
+				if v.Name=="Torso" then
+					torso=newpart
+ 
+					if not hitpos then
+						hitpos=newpart.Position
+					end
+				end
+				if v.Name=="Left Arm" then larm=newpart end
+				if v.Name=="Right Arm" then rarm=newpart end
+				if v.Name=="Left Leg" then lleg=newpart end
+				if v.Name=="Right Leg" then rleg=newpart end
+
+				newpart.AssemblyLinearVelocity = v3()
+				newpart.AssemblyAngularVelocity = v3()
+				delay(10,function() newpart.Anchored=true end)
+					
+			elseif v:IsA("Shirt") or v:IsA("Pants") or v:IsA("ShirtGraphic") then
+				v:Clone().Parent=newbody
+			elseif v:IsA("Hat") or v:IsA("Accessory") then
+				v:Clone().Parent=newbody
+			elseif v:IsA("CharacterMesh") then
+				v:Clone().Parent=newbody
+			end
+		end
+
+		local dist
+		if weapon == "RPG-7" or weapon == "M32 GL" or weapon == "AWP of Nuke Shots" then 
+			dist=0
+		else
+			dist=hitpos and ceil((firepos-hitpos).Magnitude) or 0
+		end
+		
+		local headshot=hit and hit.Name=="Head"
+
+		local function weldball(part,c0)
+			local ball=new("Part",newbody)
+			ball.Shape="Ball"
+			ball.TopSurface=0
+			ball.BottomSurface=0
+			ball.Size=v3(1,1,1)			
+			ball.Transparency=1
+			
+			local w=new("Weld")
+			w.Part0=part
+			w.Part1=ball
+			w.C0=not c0 and cf(0,-0.5,0) or c0
+			w.Parent=ball		
+		end	
+		
+		local function weldtorso(part,setcf,c0,c1)
+
+			part.CFrame = torso.CFrame * setcf
+
+			local a0 = Instance.new("Attachment")
+			local a1 = Instance.new("Attachment")
+
+			a0.Parent = torso
+			a1.Parent = part
+
+			a0.CFrame = c0
+			a1.CFrame = c1
+
+			local socket = Instance.new("BallSocketConstraint")
+			socket.Attachment0 = a0
+			socket.Attachment1 = a1
+			socket.Parent = torso
+
+			socket.LimitsEnabled = true
+			socket.TwistLimitsEnabled = true
+
+			socket.UpperAngle = 60
+			socket.TwistLowerAngle = -45
+			socket.TwistUpperAngle = 45
+
+			weldball(part)
+		end
+		
+		if torso then
+			if weapon == "RPG-7"  or weapon == "M32 GL"  or weapon == "AWP of Nuke Shots" then
+				repchar.Gibs.LA:Clone().Parent=larm
+				repchar.Gibs.RA:Clone().Parent=rarm
+				repchar.Gibs.LL:Clone().Parent=lleg
+				repchar.Gibs.RL:Clone().Parent=rleg
+				repchar.Gibs.T:Clone().Parent=torso
+
+				repchar.Gibs.blood:Clone().Parent=larm
+				repchar.Gibs.blood:Clone().Parent=rarm
+				repchar.Gibs.blood:Clone().Parent=lleg
+				repchar.Gibs.blood:Clone().Parent=rleg
+				repchar.Gibs.blood:Clone().Parent=torso
+				repchar.Gibs.blood:Clone().Parent=head
+
+
+
+				torso.AssemblyLinearVelocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				head.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				rarm.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				larm.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				rleg.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+				lleg.Velocity=v3(rand(-200,200),rand(80,120),rand(-200,200))
+			else
+				if head then
+				local neck=new("Weld")
+				neck.Part0=torso
+				neck.Part1=head
+				neck.C0=cf(0,1.5,0)
+				neck.Parent=torso
+				end
+				if rarm then
+					weldtorso(rarm,cf(1.5,0,0),cf(1.5,0.5,0,0,0,1,0,1,0,-1,0,0),cf(0,0.5,0,0,0,1,0,1,0,-1,0,0))
+				end
+				if larm then
+					weldtorso(larm,cf(-1.5,0,0),cf(-1.5,0.5,0,0,0,-1,0,1,0,1,0,0),cf(0,0.5,0,0,0,-1,0,1,0,1,0,0))
+				end
+				if rleg then
+					weldtorso(rleg,cf(0.5,-2,0),cf(0.5,-1,0,0,0,1,0,1,0,-1,0,0),cf(0,1,0,0,0,1,0,1,0,-1,0,0))
+				end
+				if lleg then
+					weldtorso(lleg,cf(-0.5,-2,0),cf(-0.5,-1,0,0,0,-1,0,1,0,1,0,0),cf(0,1,0,0,0,-1,0,1,0,1,0,0))
+				end
+				weldball(torso,cf(0,0.5,0))
+			end
+				
+			newbody.Name = "Dead"
+			humanoid.Parent = newbody
+			humanoid.PlatformStand = true
+			humanoid.AutoRotate = false
+			humanoid.Name = "Fakehumanoid"
+			humanoid.Health = 100
+			newbody.Parent = workspace.DeadBody
+
+			task.wait() --+ let Roblox physics settle joints before forces
+
+			--+ physics ragdoll
+			humanoid.BreakJointsOnDeath = false
+
+			for _, joint in pairs(newbody:GetDescendants()) do
+				if joint:IsA("Motor6D") then
+
+					local socket = Instance.new("BallSocketConstraint")
+
+					local a0 = Instance.new("Attachment")
+					local a1 = Instance.new("Attachment")
+
+					a0.Parent = joint.Part0
+					a1.Parent = joint.Part1
+
+					a0.CFrame = joint.C0
+					a1.CFrame = joint.C1
+
+					socket.Attachment0 = a0
+					socket.Attachment1 = a1
+					socket.Parent = joint.Parent
+
+					socket.LimitsEnabled = true
+					socket.TwistLimitsEnabled = true
+
+					--+ prevents limbs from spinning 360°
+					socket.UpperAngle = 45
+					socket.TwistLowerAngle = -45
+					socket.TwistUpperAngle = 45
+
+					joint.Enabled = false
+				end
+			end
+
+			--+ repchar.Default.CMTorso:Clone().Parent = newbody
+			repchar.Default.LL:Clone().Parent = newbody
+			repchar.Default.RL:Clone().Parent = newbody
+
+
+		if currentmap == "MoonTest Map" then
+			local float 			= Instance.new("BodyForce")
+			float.Parent			= torso
+			float.Force 			= v3(0,-865,0)
+			
+			local rotate			=Instance.new("BodyAngularVelocity")
+			rotate.AngularVelocity  = v3(rand(-.2,.2), rand(-.2,.2), rand(-.2,.2))
+			rotate.P				= 50
+			rotate.Parent			= torso	
+
+			torso.AssemblyLinearVelocity=v3(0,0,0)
+			debris:AddItem(newbody,30)
+
+				
+		else
+			
+				--++ ragdoll knockback ++--
+
+				local dir = (hitpos - firepos).Unit
+
+				local force = 50
+				local upForce = 20
+				local spread = 10
+				local spin = 8
+
+				--++ weapon force tuning
+				if weapon == "FRAG" or weapon == "SMOKE GRENADE" or weapon == "FLASHBANG" then
+					force = 180
+					upForce = 80
+					spread = 60
+					spin = 20
+
+				elseif weapon == "ACR" or weapon == "SG550" or weapon == "OTS-14" or weapon == "AK12"
+					or weapon == "AK15" or weapon == "G36K" or weapon == "AK47" or weapon == "AK74"
+					or weapon == "AKM" or weapon == "AN-94" or weapon == "AUG A1" or weapon == "AUG A2"
+					or weapon == "AUG A3" or weapon == "M16A3" or weapon == "M16A4" or weapon == "AS VAL"
+					or weapon == "G36" or weapon == "SCAR-L" or weapon == "FAMAS" or weapon == "L85A2"
+					or weapon == "HONEY BADGER" or weapon == "M231" or weapon == "C7A2" then
+
+					force = 40
+					upForce = 15
+					spread = 3
+					spin = 5
+
+				elseif weapon == "M1911" or weapon == "M9A3" or weapon == "M9"or weapon == "M93R" 
+				    or weapon == "CLEANER COMPACT" or weapon == "PM MAKAROV" or weapon == "USP"
+					or weapon == "FIVE-SEVEN" or weapon == "P250" or weapon == "CZ75" or weapon == "GLOCK 17" 
+					or weapon == "GLOCK 18" or weapon == "MP412 REX" or weapon == "TEC-9"  
+					or weapon == "M45A1" or weapon == "LUGER" or weapon == "ZIP 22"  
+				    or weapon == "MATEBA 6" or weapon == "1858 NEW ARMY" or weapon == "TT-33" 
+					or weapon == "10mm" or weapon == "Deagle" or weapon == "UZI" or weapon == "Glock 18C" 
+					or weapon == "Mateba Model 6 Unica" or weapon == "EEEEEEEEEEagle" then
+
+					force = 35
+					upForce = 12
+					spread = 4
+					spin = 2
+
+				elseif weapon == "MP5K" or weapon == "MP7" or weapon == "UMP45" or weapon == "COLT SMG 635"
+					or weapon == "MP40" or weapon == "KRISS VECTOR" or weapon == "MC51SD" or weapon == "MAC10"
+					or weapon == "M3A1" or weapon == "L2A3" or weapon == "PPSH-41" or weapon == "MAC-10"
+					or weapon == "SKORPION Sec" or weapon == "Sten MK II" or weapon == "Sten MK II-S" or weapon == "AK74U"
+					or weapon == "PP-19" or weapon == "MP5" or weapon == "MP5SD" or weapon == "MP5/10"
+					or weapon == "AUG A3 PARA" or weapon == "P90" or weapon == "SKORPION EVO" or weapon == "Vector K10" then
+	
+					force = 35
+					upForce = 12
+					spread = 6
+					spin = 4
+
+				elseif weapon == "HDR" or weapon == "M107" or weapon == "AMR-2" or weapon == "INTERVENTION"
+					or weapon == "REMINGTON 700" or weapon == "BFG 50" or weapon == "M24" or weapon == "X50P"
+					or weapon == "DSR-50" or weapon == "AS50" or weapon == "STEYR SCOUT" or weapon == "AWS"
+					or weapon == "HECATE II" or weapon == "Ballista" or weapon == "L115A3" or weapon == "M40A5"
+					or weapon == "SSG 08" or weapon == "AWP" or weapon == "MOSIN NAGANT" or weapon == "Martini Henry"
+					or weapon == "L96A1" or weapon == "PGM HCII" or weapon == "PTRS-41" or weapon == "SFG 50" 
+					or weapon == "OBREZ-700" then
+
+					force = 160
+					upForce = 60
+					spread = 15
+					spin = 25
+
+				elseif weapon == "M60" or weapon == "MG36" or weapon == "L86 LSW" or weapon == "M249"
+					or weapon == "GM53" or weapon == "MG42" or weapon == "COLT LMG" or weapon == "RPK12"
+					or weapon == "MG3KWS" or weapon == "RPK" or weapon == "RPK74" or weapon == "AUG HBAR"
+					or weapon == "SCAR HAMR" or weapon == "HK21" or weapon == "RPD" or weapon == "DEATH MACHINE"
+					or weapon == "LSAT" or weapon == "Sake" then
+
+					force = 75
+					upForce = 25
+					spread = 12
+					spin = 10
+
+				elseif weapon == "1858 SHOTGUN" or weapon == "REMINGTON 870" or weapon == "KSG 12" or weapon == "SPAS 12"
+					or weapon == "USAS-12" or weapon == "STEVENS DB" or weapon == "SAIGA-12" or weapon == "KS-23M"
+					or weapon == "DBV12" or weapon == "MODEL 1887" or weapon == "MAG 7" or weapon == "M870"
+					or weapon == "WINCHESTER 1897" or weapon == "SERBU SHOTGUN" or weapon == "QUICK SHOT" or weapon == "SAWED OFF"
+					or weapon == "SAIGA-12U" or weapon == "RSh-12" then
+
+					force = 90
+					upForce = 45
+					spread = 35
+					spin = 14
+					
+				elseif weapon == "M4" or weapon == "M4A1" or weapon == "G36C" or weapon == "L22"
+					or weapon == "KN-44" or weapon == "AKU-12" or weapon == "SKORPION" or weapon == "FMG-9"
+					or weapon == "KUDA" or weapon == "GROZA-1" or weapon == "GROZA-4" or weapon == "1858 CARBINE"
+					or weapon == "FAL PARA SHORTY" or weapon == "GALIL" or weapon == "FD-T32" or weapon == "SR-3M"
+					or weapon == "SCAR PDW" or weapon == "MTAR" then
+
+					force = 35
+					upForce = 18
+					spread = 6
+					spin = 4	
+					
+				elseif weapon == "MSG90" or weapon == "DRAGUNOV SVDS" or weapon == "BEOWULF ECR" or weapon == "BEOWULF TCR"
+					or weapon == "SA58 SPR" or weapon == "SCAR SSR" or weapon == "VSS VINTOREZ" or weapon == "MK11"
+					or weapon == "SKS" or weapon == "G700" or weapon == "DRAGUNOV SVU" or weapon == "M21 EBR" 
+					or weapon == "DEAGLE 44" or weapon == "DEAGLE 50" then
+
+					force = 80
+					upForce = 35
+					spread = 15
+					spin = 12
+					
+				elseif weapon == "AG-3" or weapon == "SCAR-H" or weapon == "M1-Garand" or weapon == "BFG RIFLE"
+					or weapon == "FAL 50.00" or weapon == "AK12BR" or weapon == "FAL 50.63 PARA" or weapon == "HENRY 45-70"
+					or weapon == "G3" or weapon == "SVK12E" then
+
+					force = 75
+					upForce = 25
+					spread = 12
+					spin = 8
+					
+				elseif weapon == "M1 Thompson" or weapon == "ICR-1" or weapon == "KH-2002" or weapon == "XM8"
+					or weapon == "HONEY BADGER2" or weapon == "HK417" or weapon == "AK103" or weapon == "AK105"
+					or weapon == "U100 MK5" then
+
+					force = 50
+					upForce = 15
+					spread = 6
+					spin = 3
+				end
+
+				for _,p in ipairs(newbody:GetDescendants()) do
+					if p:IsA("BasePart") then
+
+						p.CustomPhysicalProperties = PhysicalProperties.new(1.5,0.4,0.3)
+
+						local sideBias = 0
+						local legLift = 0
+
+						if p.Name == "Left Leg" then
+							sideBias = -10
+							legLift = 6
+						elseif p.Name == "Right Leg" then
+							sideBias = 10
+							legLift = 6
+						end
+
+						--+ body part force scaling
+						local partForce = force
+
+						if p.Name == "Torso" then
+							partForce = force * 1.4
+						elseif p.Name == "Head" then
+							partForce = force * 0.5
+						else
+							partForce = force * 0.25
+						end
+
+						local velocity =
+							dir * rand(partForce*0.7, partForce) +
+							Vector3.new(
+								rand(-spread,spread) + sideBias,
+								rand(upForce*0.6, upForce) + legLift,
+								rand(-spread,spread)
+							)
+
+						p.AssemblyLinearVelocity = velocity
+
+						--+ reduce spin for legs so they don't twist together
+						local partSpin = spin
+						if p.Name == "Left Leg" or p.Name == "Right Leg" then
+							partSpin = spin * 0.4
+						end
+
+						p.AssemblyAngularVelocity = Vector3.new(
+							rand(-partSpin,partSpin),
+							rand(-partSpin,partSpin),
+							rand(-partSpin,partSpin)
+						)
+
+						--+ stronger torso push so the body stretches instead of folding
+						if p.Name == "HumanoidRootPart" or p.Name == "Torso" then
+							p.AssemblyLinearVelocity *= 1.8
+						end
+					end
+				end
+
+				debris:AddItem(newbody,10)
+		end
+		
+		local face = head:FindFirstChild("Face")	
+		if face then face.Texture = "http://www.roblox.com/asset/?id=158935702" end
+        
+		local cooltest = false
+		if cooltest and player.TeamColor == game.Teams.Reign.TeamColor then
+			local sound = Instance.new("Sound")
+			sound.Parent = head
+			sound.Volume = 1
+			sound.PlaybackSpeed = 1
+			sound.RollOffMinDistance = 1500
+			debris:AddItem(sound,2)
+			sound.SoundId = "http://roblox.com/asset/?id=105220587476121"
+			sound:Play()
+				
+		else
+		--+ death sound handling
+		if not headshot then
+			local sound = head:FindFirstChild("Voice")
+			if not sound then
+			  sound = Instance.new("Sound")
+			  sound.Parent = head
+			  sound.Name  = "Voice"
+			end
+			sound.Volume = 0.8
+			sound.Pitch = 1
+			if weapon == "KNIFE" then
+				sound.SoundId = "http://roblox.com/asset/?id=96544429313943"
+				sound.RollOffMaxDistance = 150
+				sound.Pitch = 1
+				sound:Play()
+			elseif damage<=-80 then
+				sound.SoundId = "http://roblox.com/asset/?id=121774036112933"
+				sound.RollOffMaxDistance = 150
+				sound.Pitch = 1
+				sound:Play()
+			else
+				math.randomseed(tick())
+				local s = math.random(1,2)
+				if s == 1 then
+					sound.SoundId = "http://roblox.com/asset/?id=99778334133335"
+					sound.RollOffMaxDistance = 150
+				    sound.Pitch = 1
+					sound:Play()			
+				else
+					sound.SoundId = "http://roblox.com/asset/?id=88838509115898"
+					sound.RollOffMaxDistance = 150
+					sound.Pitch = 1
+					sound:Play()						
+				end
+			end
+		end
+		
+		if headshot and damage < -70 then
+			if weapon == "FRAG" then
+			 local sharp= game.ReplicatedStorage.Effects.Sharpnel:Clone()
+				sharp.Parent = head.Parent
+			 local face= game.ReplicatedStorage.Effects.FrgWound:Clone()
+				face.Parent = head
+			debris:AddItem(sharp,3)
+			debris:AddItem(face,3)		
+			local sound = Instance.new("Sound")
+			sound.Parent = head
+			sound.Volume = 1
+			sound.PlaybackSpeed = 1
+			sound.SoundId = "rbxassetid://617796686"
+			sound:Play()
+			debris:AddItem(sound,10)
+			elseif weapon == "KNIFE" and damage>-100 then
+			 local neck= game.ReplicatedStorage.Effects.NeckBlood:Clone()
+			local sound = head:FindFirstChild("Voice")
+			if not sound then
+			  sound = Instance.new("Sound")
+			  sound.Parent = head
+			  sound.Name  = "Voice"
+			end
+			sound.Parent = head
+			sound.Volume = 1
+			sound.Pitch = 1
+			sound.SoundId = "rbxassetid://463366936"
+			sound:Play()
+			wait(1.15)
+			
+			local grs2 = game.ReplicatedStorage.Effects.BloodSpray:Clone()
+			grs2.Parent = head
+			grs2:Play()
+			
+			debris:AddItem(grs2,10)
+			debris:AddItem(neck,10)
+			else
+				
+						math.randomseed(tick())
+
+						--+ all gore sounds
+						local goreSounds = {
+							game.ReplicatedStorage.Effects.Gore1,
+							game.ReplicatedStorage.Effects.Gore2,
+							game.ReplicatedStorage.Effects.Gore3,
+							game.ReplicatedStorage.Effects.Gore4,
+							game.ReplicatedStorage.Effects.Gore5,
+							game.ReplicatedStorage.Effects.Gore6,
+							game.ReplicatedStorage.Effects.Gore7,
+							game.ReplicatedStorage.Effects.Gore8,
+							game.ReplicatedStorage.Effects.Gore9,
+							game.ReplicatedStorage.Effects.Gore10,
+							game.ReplicatedStorage.Effects.Gore11,
+							game.ReplicatedStorage.Effects.Gore12,
+							game.ReplicatedStorage.Effects.Gore13,
+							game.ReplicatedStorage.Effects.Gore14,
+							game.ReplicatedStorage.Effects.Gore15
+						}
+
+						--+ pick a random one
+						local choice = math.random(1, #goreSounds)
+						local grs = goreSounds[choice]:Clone()
+						grs.Parent = head
+						grs:Play()
+
+						--+ automatically destroy after it finishes
+						grs.Ended:Connect(function()
+							grs:Destroy()
+						end)
+
+						local chunkCount = 8
+
+						for i = 1, chunkCount do
+							local part = Instance.new("Part")
+							part.Name = "Gib"
+							part.Parent = game.Workspace.Ignore
+							part.CanCollide = true
+							part.Anchored = false
+							part.Shape = Enum.PartType.Block
+
+							--+ decide if this piece is skull or brain
+							local isSkull = math.random() < 0.3
+
+							if isSkull then
+								--+ skull fragment
+								part.Material = Enum.Material.Asphalt
+								part.Size = Vector3.new(
+									math.random(2,4)/10,
+									math.random(1,3)/10,
+									math.random(1,3)/10
+								)
+
+								local skullColors = {
+									BrickColor.new("Linen")
+								}
+
+								part.BrickColor = skullColors[math.random(1,#skullColors)]
+
+							else
+								--+ brain chunk
+								part.Material = Enum.Material.Mud
+								part.Size = Vector3.new(
+									math.random(4,7)/10,
+									math.random(3,6)/10,
+									math.random(2,4)/10
+								)
+
+								local brainColors = {
+									BrickColor.new("White"),
+									BrickColor.new("Crimson"),
+									BrickColor.new("Dusty rose"),
+									BrickColor.new("Cocoa"),
+									BrickColor.new("Maroon")
+								}
+
+								part.BrickColor = brainColors[math.random(1,#brainColors)]
+							end
+
+							part.Transparency = 0.02
+							part.CustomPhysicalProperties = PhysicalProperties.new(3,0.6,0.2)
+
+							--+ spawn close to head center
+							local offset = Vector3.new(
+								math.random(-1,1)/10,
+								math.random(-1,1)/10,
+								math.random(-1,1)/10
+							)
+
+							part.CFrame =
+								head.CFrame
+								* CFrame.new(offset)
+								* CFrame.Angles(
+									math.rad(math.random(0,360)),
+									math.rad(math.random(0,360)),
+									math.rad(math.random(0,360))
+								)
+
+							--+ cone burst
+							task.defer(function()
+
+								local forward = head.CFrame.LookVector
+								local coneAngle = math.rad(25)
+
+								local randomDir = (forward + Vector3.new(
+									math.random() * math.tan(coneAngle) - math.tan(coneAngle)/2,
+									math.random() * 0.5,
+									math.random() * math.tan(coneAngle) - math.tan(coneAngle)/2
+									)).Unit
+
+								part.AssemblyLinearVelocity = randomDir * math.random(20,30)
+
+								part.AssemblyAngularVelocity = Vector3.new(
+									math.random(-6,6),
+									math.random(-6,6),
+									math.random(-6,6)
+								)
+
+							end)
+
+							debris:AddItem(part,10)
+
+						end
+						local rng = Random.new()
+
+						--+ what each neck keeps (headache)
+						local NeckConfig = {
+							[1] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[2] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[3] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[4] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[5] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[6] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[7] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[8] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[9] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[10] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[11] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[12] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[13] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[14] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=true, FaceFrontAttachment=false},
+							[15] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[16] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[17] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[18] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[19] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[20] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[21] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=true, FaceFrontAttachment=false},
+							[22] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+							[23] = {HatAttachment=false, HairAttachment=false, FaceCenterAttachment=false, FaceFrontAttachment=false},
+						}
+
+						local character = torso.Parent
+						local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+						if humanoid then
+
+							local neckChoice = rng:NextInteger(1,23)
+							local config = NeckConfig[neckChoice]
+
+							--+ remove accessories based on the neck rules
+							for _, acc in ipairs(character:GetChildren()) do
+								if acc:IsA("Accessory") then
+									local handle = acc:FindFirstChild("Handle")
+									if handle then
+										for attachmentName, allowed in pairs(config) do
+											if handle:FindFirstChild(attachmentName) and not allowed then
+												acc:Destroy()
+												break
+											end
+										end
+									end
+								end
+							end
+
+							--+ make head invisible
+							local head = character:FindFirstChild("Head")
+							if head then
+								head.Transparency = 1
+								local face = head:FindFirstChildWhichIsA("Decal")
+								if face then
+									face.Transparency = 1
+								end
+							end
+
+							--+ clone neck
+							local accessory = game.ReplicatedStorage.Effects:FindFirstChild("Neck"..neckChoice):Clone()
+
+							if accessory and accessory:IsA("Accessory") then
+
+								--+ match skin color wen ded
+								local bodyColors = character:FindFirstChildOfClass("BodyColors")
+								if bodyColors then
+									local limb = accessory:FindFirstChild("Handle"):FindFirstChild("Limb")
+									if limb then
+										limb.Color = bodyColors.HeadColor3
+									end
+								end
+
+								humanoid:AddAccessory(accessory)
+								debris:AddItem(accessory,10)
+
+							end
+
+						end
+			local grs2 = game.ReplicatedStorage.Effects.BloodSpray:Clone()
+			grs2.Parent = head
+			grs2:Play()
+			debris:AddItem(grs2,10)
+			end
+			end
+		end
+		end
+		handlekill(player,killer,weapon,hitpos,firepos,dist,headshot,attachdata,damage)
+	end)
+		end
+	
+
+
+
+
+--vector module
+--By AxisAngle (Trey Reynolds)
+print("Load vector")
+
+do
+	local pi		=math.pi
+	local cos		=math.cos
+	local sin		=math.sin
+	local acos		=math.acos
+	local asin		=math.asin
+	local atan2		=math.atan2
+	local random	=math.random
+
+	local v3		=Vector3.new
+	local nv		=Vector3.new()
+
+	vector.identity = nv
+	vector.new = v3
+
+	--+ safer than binding nv.lerp directly
+	function vector.lerp(a, b, t)
+		return a + (b - a) * t
+	end
+
+	function vector.random(a, b)
+		local p = acos(1 - 2 * random()) / 3
+		local z = 3^0.5 * sin(p) - cos(p)
+		local r = ((1 - z * z) * random())^0.5
+		local t = 6.28318 * random()
+		local x = r * cos(t)
+		local y = r * sin(t)
+
+		if a and b then
+			local m = (a + (b - a) * random()) / (x*x + y*y + z*z)^0.5
+			return v3(m * x, m * y, m * z)
+		elseif a then
+			return v3(a * x, a * y, a * z)
+		else
+			return v3(x, y, z)
+		end
+	end
+
+	function vector.anglesyx(x, y)
+		local cx = cos(x)
+		return v3(-cx * sin(y), sin(x), -cx * cos(y))
+	end
+
+	function vector.toanglesyx(v)
+		local x, y, z = v.x, v.y, v.z
+		local mag = (x*x + y*y + z*z)^0.5
+
+		if mag < 1e-8 then
+			return 0, 0
+		end
+
+		return asin(y / mag), atan2(-x, -z)
+	end
+
+	function vector.slerp(v0, v1, t)
+		local x0, y0, z0 = v0.x, v0.y, v0.z
+		local x1, y1, z1 = v1.x, v1.y, v1.z
+
+		local m0 = (x0*x0 + y0*y0 + z0*z0)^0.5
+		local m1 = (x1*x1 + y1*y1 + z1*z1)^0.5
+
+		if m0 < 1e-8 or m1 < 1e-8 then
+			return nv
+		end
+
+		local co = (x0*x1 + y0*y1 + z0*z1) / (m0 * m1)
+
+		if co < -0.99999 then
+			local px, py, pz = 0, 0, 0
+			if x0*x0 < y0*y0 then
+				if x0*x0 < z0*z0 then px = 1 else pz = 1 end
+			else
+				if y0*y0 < z0*z0 then py = 1 else pz = 1 end
+			end
+
+			local th = acos((x0*px + y0*py + z0*pz) / m0)
+			local r = pi / th * t
+			local s = ((1 - t) * m0 + t * m1) / sin(th)
+			local s0 = s / m0 * sin((1 - r) * th)
+			local s1 = s / m1 * sin(r * th)
+
+			return v3(
+				s0 * x0 + s1 * px,
+				s0 * y0 + s1 * py,
+				s0 * z0 + s1 * pz
+			)
+
+		elseif co < 0.99999 then
+			local th = acos(co)
+			local s = ((1 - t) * m0 + t * m1) / (1 - co * co)^0.5
+			local s0 = s / m0 * sin((1 - t) * th)
+			local s1 = s / m1 * sin(t * th)
+
+			return v3(
+				s0 * x0 + s1 * x1,
+				s0 * y0 + s1 * y1,
+				s0 * z0 + s1 * z1
+			)
+
+		elseif m0 < m1 then
+			return ((1 - t) * m0 / m1 + t) * v1
+		else
+			return ((1 - t) + t * m1 / m0) * v0
+		end
+	end
+
+end
+
+
+
+
+
+
+--environment module
+--by litozinnamon
+print("Load environment")
+
+do
+	local wfc			= game.WaitForChild
+	local ffc			= game.FindFirstChild
+	local ud2			= UDim2.new
+	local v3			= Vector3.new
+	local cf			= CFrame.new
+	local angles		= CFrame.Angles
+	local deg			= math.pi / 180
+	local random		= math.random
+	local color			= Color3.new
+	local colorseq		= ColorSequence.new
+	local debris		= game:GetService("Debris")
+	local new			= Instance.new
+
+	local repeffects	= game.ReplicatedStorage.Effects
+	local blood			= repeffects.Blood
+	local bloodsplat	= repeffects.BloodSplat
+	local hole			= repeffects.Hole
+	local ignore		= workspace.Ignore
+
+	----------------------------------------------------------------
+	--++ break window
+	----------------------------------------------------------------
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local Debris = game:GetService("Debris")
+
+	local Effects = ReplicatedStorage:WaitForChild("Effects")
+
+	local glassFolder = Effects:WaitForChild("GlassBreakSounds")
+
+	network:add("breakwindow", function(hit, force)
+		if not hit or not hit:IsDescendantOf(workspace) then return end
+		if hit:GetAttribute("Broken") then return end
+		hit:SetAttribute("Broken", true)
+
+		--+ random sound
+		local sounds = glassFolder:GetChildren()
+		if #sounds > 0 then
+			local sound = sounds[math.random(1, #sounds)]:Clone()
+			sound.Parent = hit
+
+			--+ vary pitch slightly
+			sound.PlaybackSpeed = math.random(90,110) / 100
+			sound.RollOffMode = Enum.RollOffMode.Inverse
+			sound.MaxDistance = 80
+			
+            --+ volume based on force
+			local power = 50
+
+			if typeof(force) == "Vector3" then
+				power = force.Magnitude
+			end
+			sound.Volume = math.clamp(power / 100, 0.5, 2)
+
+			sound:Play()
+			game:GetService("Debris"):AddItem(sound, 3)
+		end
+
+		--+ shards
+		network:bounce("renderGlassBreak", hit, hit.CFrame, force)
+
+		hit.CanCollide = false
+		hit.Transparency = 1
+
+		task.delay(2, function()
+			if hit then hit:Destroy() end
+		end)
+	end)
+
+	----------------------------------------------------------------
+	--++ ammo
+	----------------------------------------------------------------
+	network:add("getammo", function(model, diff)
+		local sparev = ffc(model, "Spare")
+		if sparev then
+			sparev.Value -= diff
+		end
+	end)
+
+	----------------------------------------------------------------
+	--++ drop gun
+	----------------------------------------------------------------
+	network:add("dropgun", function(name, mag, spare, spot, attachdata)
+		local ref = ffc(game.StarterGui.VModel, name)
+		if not ref then return end
+
+		local ignorelist = { ignore }
+		local ppl = game.Players:GetChildren()
+
+		for i = 1, #ppl do
+			if ppl[i].Character then
+				ignorelist[#ignorelist + 1] = ppl[i].Character
+			end
+		end
+
+		local model = ref:Clone()
+
+		local magv = new("IntValue", model)
+		magv.Name = "Mag"
+		magv.Value = mag
+
+		local sparev = new("IntValue", model)
+		sparev.Name = "Spare"
+		sparev.Value = spare
+
+		local namev = new("StringValue", model)
+		namev.Name = "Gun"
+		namev.Value = name
+
+		local db = new("Model", model)
+		db.Name = "DB"
+		debris:AddItem(db, 1)
+
+		for i, v in next, attachdata do
+			local data = new("StringValue", namev)
+			data.Name = i
+			data.Value = v
+		end
+
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = ignorelist
+		params.FilterType = Enum.RaycastFilterType.Exclude
+
+		local result = workspace:Raycast(spot, v3(0, -999, 0), params)
+
+		if result then
+			model.Name = "Dropped"
+			model.Parent = workspace.Ignore.GunDrop
+			model.Anchored = true
+			model.CFrame = cf(result.Position, result.Position + result.Normal)
+				* angles(0, 0, random(0, 360) * deg)
+			debris:AddItem(model, 50 - #ppl)
+		else
+			model:Destroy()
+		end
+	end)
+
+	----------------------------------------------------------------
+	--++ swap gun
+	----------------------------------------------------------------
+	network:add("swapgun", function(player, dropped, name, mag, spare, attachdata)
+		local magv = ffc(dropped, "Mag")
+		local sparev = ffc(dropped, "Spare")
+		local namev = ffc(dropped, "Gun")
+		if not namev then return end
+
+		local dropattach = {}
+		for _, v in ipairs(namev:GetChildren()) do
+			dropattach[v.Name] = v.Value
+		end
+
+		if magv and sparev then
+			network:send(player, "swapgun", namev.Value, magv.Value, sparev.Value, dropattach)
+		end
+
+		local ref = ffc(game.StarterGui.VModel, name)
+		if ref then
+			local model = ref:Clone()
+
+			local magv = new("IntValue", model)
+			magv.Name = "Mag"
+			magv.Value = mag
+
+			local sparev = new("IntValue", model)
+			sparev.Name = "Spare"
+			sparev.Value = spare
+
+			local namev = new("StringValue", model)
+			namev.Name = "Gun"
+			namev.Value = name
+
+			local db = new("Model", model)
+			db.Name = "DB"
+			debris:AddItem(db, 1)
+
+			for i, v in next, attachdata do
+				local data = new("StringValue", namev)
+				data.Name = i
+				data.Value = v
+			end
+
+			model.CFrame = dropped.CFrame
+			model.Name = "Dropped"
+			model.Parent = workspace.Ignore.GunDrop
+			model.Anchored = true
+			model:BreakJoints()
+
+			debris:AddItem(model, 60 - #game.Players:GetChildren())
+		end
+
+		dropped:Destroy()
+	end)
+
+	----------------------------------------------------------------
+	--++ blood / burn
+	----------------------------------------------------------------
+	network:add("bloodhit", function(start, hit, pos, norm)
+		network:bounce("createblood", start, hit, pos, norm)
+	end)
+
+	network:add("burning", function(hit)
+		network:bounce("burn", hit)
+	end)
+
+end
+
+
+
+--roundsystem module
+--by litozinnamon
+print("Loading roundsystem module")
+do
+	local wfc			=game.WaitForChild
+	local ffc			=game.FindFirstChild
+	local ud2			=UDim2.new
+	local v3			=Vector3.new
+	local cf			=CFrame.new
+	local angles		=CFrame.Angles
+	local deg			=math.pi/180
+	local random		=math.random
+	local abs			=math.abs
+	local color			=Color3.new
+	local ray			=Ray.new
+	local raycast		=workspace.FindPartOnRayWithIgnoreList
+	local debris		=game.Debris
+	local new			=Instance.new
+	local bc			=BrickColor.new
+
+	local light			=game.Lighting
+	local players		=game.Players
+	local repstore		=game.ReplicatedStorage
+	local props			=repstore.GamemodeProps
+
+	local misc			=repstore.Miscs
+	
+	local settings		=repstore.ServerSettings
+	local countdown		=settings.Countdown
+	local winner		=settings.Winner
+	local showresult	=settings.ShowResults
+	local gamemode		=settings.GameMode
+	local timer			=settings.Timer
+	local maxscoredis	=settings.MaxScore
+	local gscore		=settings.UnitedStatesScore
+	local pscore		=settings.RussianFederationScore
+	local setquote		=settings.Quote
+	local allowspawn	=settings.AllowSpawn
+	local mapname		=settings.MapName
+	
+	local tnoobs		=game.Teams.Anarchy.TeamColor
+	local tguests		=game.Teams.Reign.TeamColor
+	
+	--+ game mode props
+	local domflag		=wfc(props,"DomFlag")
+	local kingflag		=wfc(props,"KingFlag1")
+	local kingflag2		=wfc(props,"KingFlag2")
+	domflag.Script.Disabled=true
+	kingflag.Script.Disabled=true
+	kingflag2.Script.Disabled=true
+	
+	local roundtime		=15
+	local currentmode	="tdm"
+	local gamerunning	=false
+	local lastt			=tick()
+	local int			=0.1
+
+	local endscore		=0
+	local point			=0
+
+	local gamelist		={
+		tdm={
+			Name		="TEAM TAKEDOWN",
+			Length		=10,
+			Startscore	=0,
+			Endscore	=100,
+			Point		=0,
+			Scoretype	="Gain",
+			Killscore	=true,
+		},
+		dom={
+			Name		="TAKEOVER",
+			Length		=10,
+			Startscore	=0,
+			Endscore	=750,
+			Interval	=25,
+			Point		=8,
+			Scoretype	="Gain",
+			Killscore	=true,
+		},
+		koth={
+			Name		="SPIKE✴HILL",
+			Length		=10,
+			Startscore	=900,
+			Endscore	=0,
+			Interval	=1,
+			Point		=20,
+			Scoretype	="Attrition",
+			Killscore	=true,
+		},
+	}
+	
+	local lightset = {
+		Shipment = {
+			Name = "_SHIPMENT 2022", Indoor = false, Ambient = {20, 18, 25}, OutdoorAmbient = {50, 45, 60}, ColorShift_Bottom = {70, 60, 90}, ColorShift_Top = {255, 170, 120}, Brightness = 1.15, ClockTime = 16.6, ExposureCompensation = 0.25, EnvironmentDiffuseScale = 0.2, EnvironmentSpecularScale = 0.85, ShadowSoftness = 0.25, GeographicLatitude = 35,
+		},
+
+		ShootHouse = {
+			Name = "_MARAHOUSE", Indoor = false, Ambient = {12, 12, 18}, OutdoorAmbient = {38, 38, 57}, ColorShift_Bottom = {80, 90, 120}, ColorShift_Top = {170, 200, 255}, Brightness = 2.8, ClockTime = 12.8, ExposureCompensation = 0.2, EnvironmentDiffuseScale = 0.2, EnvironmentSpecularScale = 1, ShadowSoftness = 0.35, GeographicLatitude = 20,
+		},
+
+		Killhouse = {
+			Name = "_KILLHOUSE", Indoor = true, Ambient = {120, 125, 115}, OutdoorAmbient = {150, 150, 135}, ColorShift_Bottom = {0, 0, 0}, ColorShift_Top = {255, 242, 215}, Brightness = 4, ClockTime = 14.5, ExposureCompensation = 0, EnvironmentDiffuseScale = 0.25, EnvironmentSpecularScale = 0.75, ShadowSoftness = 0.35, GeographicLatitude = 18,
+		},
+
+		Training = {
+			Name = "_TRAINING FIELD", Indoor = false, Ambient = {105, 115, 130}, OutdoorAmbient = {125, 135, 150}, ColorShift_Bottom = {0, 0, 0}, ColorShift_Top = {155, 170, 190}, Brightness = 2.315, ClockTime = 12.714, ExposureCompensation = 0.92, EnvironmentDiffuseScale = 0.171, EnvironmentSpecularScale = 1, ShadowSoftness = 0, GeographicLatitude = 53,
+		},
+
+		Highrise = {
+			Name = "_HIGHRISE", Indoor = false, Ambient = {140, 135, 120}, OutdoorAmbient = {170, 160, 140}, ColorShift_Bottom = {210, 200, 180}, ColorShift_Top = {255, 225, 170}, Brightness = 2.7, ClockTime = 15.5, ExposureCompensation = 0.25, EnvironmentDiffuseScale = 0.45, EnvironmentSpecularScale = 0.85, ShadowSoftness = 0.3, GeographicLatitude = 30,
+		},
+
+		Cranehold = {
+			Name = "_OPERATION CRANEHOLD", Indoor = false, Ambient = {130, 145, 155}, OutdoorAmbient = {160, 175, 180}, ColorShift_Bottom = {165, 190, 200}, ColorShift_Top = {235, 240, 245}, Brightness = 3, ClockTime = 15, ExposureCompensation = 0.18, EnvironmentDiffuseScale = 0.171, EnvironmentSpecularScale = 0.95, ShadowSoftness = 0.45, GeographicLatitude = 55,
+		},
+
+		Snowline = {
+			Name = "_SNOWLINE FLATS", Indoor = false, Ambient = {135, 150, 150}, OutdoorAmbient = {160, 175, 170}, ColorShift_Bottom = {170, 200, 190}, ColorShift_Top = {235, 240, 230}, Brightness = 2.4, ClockTime = 14.2, ExposureCompensation = 0.1, EnvironmentDiffuseScale = 0.5, EnvironmentSpecularScale = 0.7, ShadowSoftness = 0.4, GeographicLatitude = 60,
+		}, 
+
+		Sphere = {
+			Name = "_TRAINING SPHERE", Indoor = true, Ambient = {180, 185, 190}, OutdoorAmbient = {200, 205, 210}, ColorShift_Bottom = {215, 220, 225}, ColorShift_Top = {255, 255, 255}, Brightness = 3.2, ClockTime = 18.5, ExposureCompensation = 0.4, EnvironmentDiffuseScale = 0.6, EnvironmentSpecularScale = 1, ShadowSoftness = 0.6, GeographicLatitude = 0,
+		},
+	}
+
+	local postfx = {
+
+		Shipment = {
+			TintColor = Color3.fromRGB(255, 210, 190),
+			Contrast = 0.32,
+			Brightness = -0.02,
+			Saturation = -0.05,
+
+			BloomIntensity = 0.3,
+			BloomSize = 26,
+			BloomThreshold = 0.9,
+			
+			RayIntensity = 0.05,
+			RaySpread = 0.2,
+
+			FocusDistance = 70,
+			InFocusRadius = 45,
+			NearIntensity = 0.03,
+			FarIntensity = 0.06,
+		},
+		ShootHouse = {
+			TintColor = Color3.fromRGB(255, 250, 240),
+			Contrast = 0.22,
+			Brightness = -0.03,
+			Saturation = 0.08,
+
+			BloomIntensity = 0.2,
+			BloomSize = 40,
+			BloomThreshold = 0.9,
+
+			RayIntensity = 0.05,
+			RaySpread = 0.2,
+
+			FocusDistance = 90,
+			InFocusRadius = 55,
+			NearIntensity = 0.02,
+			FarIntensity = 0.05,
+		},
+		Killhouse = {
+			TintColor = Color3.fromRGB(250, 245, 225),
+			Contrast = 0.5,
+			Brightness = 0.07,
+			Saturation = 0,
+
+			BloomIntensity = 0.5,
+			BloomSize = 14,
+			BloomThreshold = 1.35,
+			
+			RayIntensity = 0.05,
+			RaySpread = 0.2,
+
+			FocusDistance = 80,
+			InFocusRadius = 70,
+			NearIntensity = 0.01,
+			FarIntensity = 0.02,
+		},
+		Training = {
+			TintColor = Color3.fromRGB(250, 251, 252),
+			Contrast = 0.1,
+			Brightness = 0.053,
+			Saturation = 0.1,
+
+			BloomIntensity = 0.4,
+			BloomSize = 0.288,
+			BloomThreshold = 0.95,
+			
+			RayIntensity = 0.08,
+			RaySpread = 0.6,
+
+			FocusDistance = 60,
+			InFocusRadius = 35,
+			NearIntensity = 0.05,
+			FarIntensity = 0.1,
+		},
+		Highrise = {
+			TintColor = Color3.fromRGB(255, 235, 200),
+			Contrast = 0.28,
+			Brightness = 0.05,
+			Saturation = -0.04,
+
+			BloomIntensity = 0.2,
+			BloomSize = 20,
+			BloomThreshold = 1.15,
+			
+			RayIntensity = 0.085,
+			RaySpread = 0.2,
+
+			FocusDistance = 85,
+			InFocusRadius = 50,
+			NearIntensity = 0,
+			FarIntensity = 0.07,
+		},
+		Cranehold = {
+			TintColor = Color3.fromRGB(229, 255, 251),
+			Contrast = 0.1,
+			Brightness = 0.1,
+			Saturation = -0.2,
+
+			BloomIntensity = 0.1,
+			BloomSize = 14,
+			BloomThreshold = 1.3,
+			
+			RayIntensity = 0.225,
+			RaySpread = 1,
+
+			FocusDistance = 140,
+			InFocusRadius = 90,
+			NearIntensity = 0.01,
+			FarIntensity = 0.04,
+		},
+		Snowline = {
+			TintColor = Color3.fromRGB(255, 233, 233),
+			Contrast = 0.5,
+			Brightness = 0,
+			Saturation = -0.3,
+
+			BloomIntensity = 0.08,
+			BloomSize = 12,
+			BloomThreshold = 1.4,
+			
+			RayIntensity = 0.05,
+			RaySpread = 0.2,
+
+			FocusDistance = 140,
+			InFocusRadius = 90,
+			NearIntensity = 0.01,
+			FarIntensity = 0.04,
+		},
+		Sphere = {
+			TintColor = Color3.fromRGB(240, 245, 255),
+			Contrast = 0.32,
+			Brightness = 0.05,
+			Saturation = 0.08,
+
+			BloomIntensity = 0.3,
+			BloomSize = 24,
+			BloomThreshold = 1.05,
+			
+			RayIntensity = 0.05,
+			RaySpread = 0.2,
+
+			FocusDistance = 70,
+			InFocusRadius = 45,
+			NearIntensity = 0.04,
+			FarIntensity = 0.07,
+		},
+	}
+
+	--++ quotes
+	local quotes		={
+		"TIP: Press Shift + L to enter cinematic mode",
+		"what's up guys uhh good evening and sh*t it's like 10:49 PM —Frank Ocean",
+		"This Game allows me to shoot while running, I wonder if some one can get a kill with this.. —Robloxian_Transmonger",	
+		"Do them dirty, in front of they dad —Sun Tzu, The Art of War",
+		"Before you marry a person, you should first make them use a computer with slow internet service to see who they really are. —Will Ferrell",
+		"Behind every great man is a woman rolling her eyes.” —Jim Carrey",
+		"There is no such thing as fun for the whole family.” —Jerry Seinfeld",
+		"Friends are God’s way of apologizing to us for our families.” —Tennessee Williams",
+		"If you can’t beat them, arrange to have them beaten.” —George Carlin",
+		"If you want to know what God thinks of money, look at the people he gave it to.” —Dorothy Parker",
+		"Anybody who tells you money can’t buy happiness never had any.” —Samuel L. Jackson",
+		"Ay Bro Shawty Bad —Vine",
+		"i wanna be a cowboy baby —1 Eyed Wonder",
+		"Hey uh.. its ya boy..um...SKINNY PE**S —Noel Miller",
+		"Ahhhh! Stop, I almost dropped my croissant. —terryjr12",
+		"what the f**k is up kyle —Nick Colletti",
+		"that s**t hurted —Korion Steea",
+		"Next time you f**king put a hand on me I'm gonna f**king rip your face off bi**h —Pushed Kid💀",
+		"We all die. You either kill your self, or get killed. Whachugondo. Whachugondo. —Whachugondo",
+		"asuh dude —Nick Colletti",
+		"You're an inspiration for birth control. —Duke Nukem",
+		"Maybe if you got rid of that old yee-yee a** haircut you got you'd get some bi**hes on yo' d**k, n**aaaaa —Lamar Davis",
+		"Sir? Permission to leave the station. For what purpose, Master Chief? To give the covenant back their bomb. —Master Chief",
+		"bruh imma just be butt a** naked so the wind can blow against my balls n sh*t AYO BRO WATCH YO JET WATCH YO- —LeanandCuisin",
+		"But I did kidnap his wife! —Trevor Philips",
+		"Take my advice rookie, you ever meet a woman make sure she's got balls. —Buck Halo 3",
+		"SoO wAke uP, mR. FreEmAn.WakE up aNd sMelL thE AshEs. —G-Man",
+		"*dying* Tell my wife… I had another wife… —Saints Row IV",
+		"cough How’s your sister? —Cayde 6",
+		"Back in my day we didn’t have any fancy tanks. We had sticks. Two sticks and a rock for the entire platoon. And we had to share the rock! —SGT.Johnson Halo 2",
+		"YOU FOOKIN MUPPET!! —Clash",
+		"Well done. Here come the test results: You are a horrible person. That's what it says: a horrible person. We weren't even testing for that. —GLaDOS",
+		"Commander, at times like this my people had an ancient saying. Kill him. —Javik",
+		"I need a weapon. —Master Chief",
+		"This cave is not a natural formation —Cortana",
+		"NICOOOO ITS YOUR COSSIN ROMANNNN. LETS GO BOWLING —GTAIV",
+		"I’m Commander Shepard and this is my favorite store on the citadel. —Commander Shepard",
+		"Why are we here? Just to suffer? —Kazuhira Miller",
+		"What the h*ll kind of name is Soap eh, how'd a muppet like you pass selection? —Captain Price",
+		"Hey you, you’re finally awake. —Ralof",
+		"Remember, no Russian —Makarov",
+		"Birthdays are like Regrets they just keep comin each one a new scar that slows you down and Drag you closer to your Grave —Max Payne",
+		"oh I know that the ladies like —SGT. Avery Johnson",
+		"When Life Gives You Lemons, Don’t Make Lemonade. Make Life Take The Lemons Back! Get Mad! —Cave Johnson",
+		"Stand In The Ashes Of A Trillion Dead Souls, And Ask The Ghosts If Honor Matters. The Silence Is Your Answer. —Javik",	
+		"What Is Better? To Be Born Good? Or To Overcome Your Evil Nature Through Great Effort? —Paarthurnax",
+		"It's Dangerous To Go Alone. Take This! —Elderly Man",
+		"Against All The Evil That Hell Can Conjure, All The Wickedness That Mankind Can Produce, We Will Send Unto Them ... Only You. Rip And Tear, Until It Is Done. —King Novik",
+		"But then there was The Bite of '87. Yeah. I-It's amazing that the human body can live without the frontal lobe, you know? —FNAF",
+		"I survived because the fire inside me burned brighter than the fire around me. —Joshua Graham",
+		"If the laws of physics no longer apply in the future… God help you. —Announcer",
+		"There Are Fates Worse Than Death! —Raiden",
+		"Friendship! FRIENDSHIP? —MKII",
+		"Get Over Here! —Scorpion",
+		"Do a Barrel Roll! —Peppy",
+		"! —MGS",
+		"Press F to Pay Respects —CODAW",
+		"No. —DOOM",
+		"PROTIP: To Defeat the Cyberdemon, Shoot it Until it Dies. —DOOM",
+		"I Used to Be an Adventurer Like You… Until I Took an Arrow to the Knee. —Dawnstar Guard",
+		"C-C-C-COMBO BREAKER! —Killer Instinct",
+		"I’ve got Balls of Steel! —Duke Nukem",
+		"it was mating season, how was i to know she was your sister? —Captain Qwark",
+		"The right man in the wrong place can make all the difference in the world. —Half-Life 2",
+	}
+
+	local teston=script.Parent.teston.Value
+
+	local function refresh()
+		wait(0)
+		local cur=ffc(workspace,"Map")
+		if cur then cur:Destroy() end	
+		pscore.Value=0
+		gscore.Value=0
+		wait(0)
+	end
+
+	local function spawnplayers()
+		wait(0)
+		local map
+		local servertime = tick() + 1
+		repeat map=ffc(workspace,"Map") wait(0) until map
+		local ppl=players:GetChildren()
+		for i=1,#ppl do
+			pcall(function()
+				if ppl[i].Character and ffc(workspace,ppl[i].Name) and ffc(ppl[i].Character,"Torso") then
+					network:send(ppl[i], "countdown", tick())
+				end
+			end)
+		end
+	end
+
+
+
+	local function gameresult(type)
+		if pscore.Value==gscore.Value then
+			winner.Value=BrickColor.new("Black")
+		elseif type=="Gain" then
+			if pscore.Value>=endscore or pscore.Value>gscore.Value then
+				winner.Value=tguests
+			else
+				winner.Value=tnoobs
+			end
+		elseif type=="Attrition" then
+			if pscore.Value<=endscore or pscore.Value<gscore.Value then
+				winner.Value=tnoobs
+			else
+				winner.Value=tguests
+			end
+		end
+		setquote.Value=quotes[math.random(1,#quotes)]
+		wait(0.1)
+		showresult.Value=true
+		wait(teston and 0 or 10)
+		showresult.Value=false
+		
+	
+	end
+
+	local function checkresult(type)
+		if gamerunning then
+			if type=="Gain" then
+				if pscore.Value>=endscore or gscore.Value>=endscore then
+					gamerunning=false
+				end
+			elseif type=="Attrition" then
+				if pscore.Value<=endscore or gscore.Value<=endscore then
+					gamerunning=false
+				end
+			end
+		end
+	end
+
+	local function respawnall()
+		pcall(function()
+			local ppl=players:GetChildren()
+			for i=1,#ppl do
+				playerstates:autodespawn(ppl[i])
+			end
+			print("players respawned")
+			wait(0)
+		end)
+	end
+
+
+	local sort do
+		local a
+		local b={} --+ extra space
+	
+		local function lt(a,b)
+			return a<b
+		end
+	
+		function sort(table,comp)
+			comp=comp or lt
+			a=table
+			local n=#a
+			local c=1
+			while c<n do
+				local i=1
+				while i<=n-c do
+					local p=i
+					local i0=i
+					local j0=i+c
+					local i1=j0-1
+					local j1=i1+c<n and i1+c or n
+					while i0<=i1 and j0<=j1 do
+						if comp(a[j0],a[i0]) then
+							b[p]=a[j0]
+							j0=j0+1
+						else
+							b[p]=a[i0]
+							i0=i0+1
+						end
+						p=p+1
+					end
+					for x=i0,i1 do
+						b[p]=a[x]
+						p=p+1
+					end
+					for y=j0,j1 do
+						b[p]=a[y]
+						p=p+1
+					end
+					i=i+2*c
+				end
+				for j=i,n do
+					b[j]=a[j]
+				end
+				a,b=b,a
+				c=2*c
+			end
+			if a~=table then
+				for i=1,n do
+					table[i]=a[i]
+				end
+			end
+			return table
+		end
+	end
+
+	local function balanceteam(clear)
+		--+ pcall(function()
+			local switch=random(1,2)
+			local ppl=players:GetChildren()
+			sort(ppl,function(a,b) return playerstates:getplayerscore(a)>playerstates:getplayerscore(b) end)
+			for i=1,#ppl do
+				local prevt=ppl[i].TeamColor
+				if clear then
+					playerstates:clearleaderboard(ppl[i])
+				end
+				pcall(function()
+					ppl[i].TeamColor=switch==1 and tguests or tnoobs
+				end)
+				local note=misc.TeamBalance:Clone()
+				note.Parent=ppl[i].PlayerGui
+				if prevt~=ppl[i].TeamColor then
+					playerstates:autodespawn(ppl[i])
+					note.Place.Text="You have been placed in "..(switch==1 and "Reign" or "Anarchy")
+				else
+					note.Place.Text="You remain in "..(switch==1 and "Reign" or "Anarchy")
+				end
+				note.Place.TextColor3=switch==1 and tguests.Color or tnoobs.Color
+				debris:AddItem(note,5)
+				
+				switch=switch==1 and 2 or 1
+			end
+			print("teams balanced")
+		--+ end)
+		if clear then
+			wait(0)
+		end
+	end
+
+	local function checkteambalance()
+		print("checking")
+		local a=0
+		local b=0
+		local ppl=players:GetChildren()
+		for i=1,#ppl do
+			if ppl[i].TeamColor==tguests then
+				a=a+1
+			else
+				b=b+1
+			end
+		end
+		if abs(a-b)>=2 then
+			balanceteam()
+		end
+	end
+
+	local function intervalcheck(pt,sec)
+		if currentmode=="dom" then
+			local map					=ffc(workspace,"Map")
+			if map then
+				local propfolder		=ffc(map,"AGMP")
+				if propfolder then
+					local props			=propfolder:GetChildren()
+					for i=1,#props do			--+ get each flag
+						local base				=ffc(props[i],"Base")
+						local tm				=ffc(props[i],"TeamColor")
+						local cp				=ffc(props[i],"CapPoint")
+						local iscapping			=ffc(props[i],"IsCapping")
+						if tm.Value==tnoobs or tm.Value==tguests then
+							if not iscapping.Value then
+								if tm.Value==tnoobs then
+									gscore.Value=gscore.Value+pt
+								elseif tm.Value==tguests then
+									pscore.Value=pscore.Value+pt
+								end
+							end
+						end
+					end
+				end
+			end
+		elseif currentmode=="koth" then
+			local map					=ffc(workspace,"Map")
+			if map then
+				local propfolder		=ffc(map,"AGMP")
+				if propfolder then
+					local prop		=ffc(propfolder,"KingFlag")
+					if prop then				--+ get hill
+						local base				=ffc(prop,"Base")
+						local tm				=ffc(prop,"TeamColor")
+						local cp				=ffc(prop,"CapPoint")
+						local iscapping			=ffc(prop,"IsCapping")
+						if tm.Value==tnoobs or tm.Value==tguests then
+							if not iscapping.Value then
+								--+ check for number of players in zone
+								local ppl			=game.Players:GetChildren()
+								local cappers		={}
+								local numplayers	=0
+								local interval
+								for i=1,#ppl do
+									if ppl[i].TeamColor==tm.Value then
+										local char=ppl[i].Character
+										if char then
+											local root=ffc(char,"HumanoidRootPart")
+											if root and (root.Position-base.Position).Magnitude<20 then
+												cappers[#cappers+1]=ppl[i]
+												numplayers=numplayers+1
+											end
+										end
+									end
+								end
+								interval=numplayers==0 and 10 or numplayers==1 and 5 or numplayers==2 and 4 or numplayers>=3 and 3
+								if sec%interval==0 then
+									if tm.Value==tnoobs then
+										pscore.Value=pscore.Value-pt --+ attrition based point system
+									elseif tm.Value==tguests then
+										gscore.Value=gscore.Value-pt
+									end
+									for i=1,#cappers do
+										playerstates.addscore(cappers[i],"kingholding",math.random(10,15))
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	--++ post processing controller
+	local function getOrCreateEffect(class, name)
+		local obj = light:FindFirstChild(name)
+		if not obj then
+			obj = Instance.new(class)
+			obj.Name = name
+			obj.Parent = light
+		end
+		return obj
+	end
+
+	local function applyPostFX(preset)
+		local cc  = getOrCreateEffect("ColorCorrectionEffect", "MW_CC")
+		local bloom = getOrCreateEffect("BloomEffect", "MW_Bloom")
+		local ray = getOrCreateEffect("SunRaysEffect", "MW_Ray")
+		local dof = getOrCreateEffect("DepthOfFieldEffect", "MW_DOF")
+
+		--+ color correction
+		cc.TintColor = preset.TintColor or Color3.new(1,1,1)
+		cc.Contrast = preset.Contrast or 0
+		cc.Brightness = preset.Brightness or 0
+		cc.Saturation = preset.Saturation or 0
+
+		--+ bloom
+		bloom.Intensity = preset.BloomIntensity or 0.15
+		bloom.Size = preset.BloomSize or 24
+		bloom.Threshold = preset.BloomThreshold or 1
+		
+		--+ sunray
+		ray.Intensity = preset.RayIntensity or 0.15
+		ray.Spread = preset.RaySpread or 0.15
+
+		--+ depth of field
+		dof.FocusDistance = preset.FocusDistance or 60
+		dof.InFocusRadius = preset.InFocusRadius or 40
+		dof.NearIntensity = preset.NearIntensity or 0.05
+		dof.FarIntensity = preset.FarIntensity or 0.08
+	end
+
+	--++ forward declarations
+	local applyAtmosphere
+	local applySky
+	local applyWeather
+	local applyAmbience
+
+	local function applyLighting(mapName)
+		--+ fallback so i don't silently get nil
+		local data = lightset[mapName] or lightset.Shipment
+		if not data then return end
+
+		light.Ambient                 = Color3.fromRGB(unpack(data.Ambient))
+		light.OutdoorAmbient          = Color3.fromRGB(unpack(data.OutdoorAmbient))
+		light.ColorShift_Bottom       = Color3.fromRGB(unpack(data.ColorShift_Bottom))
+		light.ColorShift_Top          = Color3.fromRGB(unpack(data.ColorShift_Top))
+		light.Brightness              = data.Brightness
+		light.ClockTime               = data.ClockTime
+		light.ExposureCompensation    = data.ExposureCompensation
+		light.GeographicLatitude      = data.GeographicLatitude
+		light.EnvironmentDiffuseScale = data.EnvironmentDiffuseScale
+		light.EnvironmentSpecularScale= data.EnvironmentSpecularScale
+		light.ShadowSoftness          = data.ShadowSoftness
+
+		applyPostFX(postfx[mapName] or postfx.Shipment)
+		applyAtmosphere(mapName)
+		applySky(mapName)
+		applyWeather(mapName)
+		applyAmbience(mapName)
+	end
+
+	applyAtmosphere = function(mapName)
+		local atmo = light:FindFirstChild("MW_Atmosphere")
+		if not atmo then
+			atmo = Instance.new("Atmosphere")
+			atmo.Name = "MW_Atmosphere"
+			atmo.Parent = light
+		end
+
+		--+ default baseline
+		atmo.Density = 0.35
+		atmo.Offset = 0.1
+		atmo.Color = Color3.fromRGB(199, 199, 199)
+		atmo.Decay = Color3.fromRGB(92, 92, 92)
+		atmo.Glare = 0.2
+		atmo.Haze = 1
+
+		-- Map-specific tweaks
+		if mapName == "Shipment" then
+			atmo.Density = 0.4
+			atmo.Offset = 0.1
+			atmo.Color = Color3.fromRGB(120, 90, 110)
+			atmo.Decay = Color3.fromRGB(50, 35, 50)
+			atmo.Glare = 0.12
+			atmo.Haze = 0.7
+		elseif mapName == "ShootHouse" then
+			atmo.Density = 0.42
+			atmo.Offset = 0.12
+			atmo.Color = Color3.fromRGB(60, 85, 120)
+			atmo.Decay = Color3.fromRGB(25, 30, 45)
+			atmo.Glare = 0.18
+			atmo.Haze = 0.85
+		elseif mapName == "Killhouse" then
+			atmo.Density = 0.32
+			atmo.Offset = 0
+			atmo.Color = Color3.fromRGB(205, 200, 180)
+			atmo.Decay = Color3.fromRGB(240, 230, 200)
+			atmo.Glare = 0.7
+			atmo.Haze = 2
+		elseif mapName == "Training" then
+			atmo.Density = 0.4
+			atmo.Offset = 1
+			atmo.Color = Color3.fromRGB(255, 255, 255)
+			atmo.Decay = Color3.fromRGB(255, 255, 255)
+			atmo.Glare = 0.43
+			atmo.Haze = 2.09
+		elseif mapName == "Highrise" then
+			atmo.Density = 0.4
+			atmo.Offset = 0.3
+			atmo.Color = Color3.fromRGB(235, 210, 170)
+			atmo.Decay = Color3.fromRGB(255, 230, 190)
+			atmo.Glare = 0.25
+			atmo.Haze = 2
+		elseif mapName == "Cranehold" then
+			atmo.Density = 0.234
+			atmo.Offset = 0.449
+			atmo.Color = Color3.fromRGB(199, 170, 107)
+			atmo.Decay = Color3.fromRGB(194, 194, 194)
+			atmo.Glare = 1.68
+			atmo.Haze = 1.7
+		elseif mapName == "Snowline" then
+			atmo.Density = 0.3
+			atmo.Offset = 0
+			atmo.Color = Color3.fromRGB(190, 210, 205)
+			atmo.Decay = Color3.fromRGB(220, 235, 230)
+			atmo.Glare = 2
+			atmo.Haze = 2
+		elseif mapName == "Sphere" then
+			atmo.Density = 0.563
+			atmo.Offset = 0.1
+			atmo.Color = Color3.fromRGB(220, 225, 230)
+			atmo.Decay = Color3.fromRGB(255, 255, 255)
+			atmo.Glare = 0.35
+			atmo.Haze = 0.4
+		end
+	end
+
+	applySky = function(mapName)
+		local sky = light:FindFirstChild("MW_Sky")
+		if not sky then
+			sky = Instance.new("Sky")
+			sky.Name = "MW_Sky"
+			sky.Parent = light
+		end
+
+		--+ default clear sky
+		sky.SkyboxBk = "rbxassetid://12699340592"
+		sky.SkyboxDn = "rbxassetid://14722101637"
+		sky.SkyboxFt = "rbxassetid://12699342718"
+		sky.SkyboxLf = "rbxassetid://12699343920"
+		sky.SkyboxRt = "rbxassetid://12699345337"
+		sky.SkyboxUp = "rbxassetid://14722092663"
+		sky.MoonTextureId = "rbxassetid://11757639970"
+		sky.SunTextureId = "rbxassetid://16018458031"
+
+		--+ map overrides
+		if mapName == "Snowline" then --SNOWY
+			sky.SkyboxBk = "rbxassetid://5098808034"
+			sky.SkyboxDn = "rbxassetid://5098808575"
+			sky.SkyboxFt = "rbxassetid://5098809080"
+			sky.SkyboxLf = "rbxassetid://5098809560"
+			sky.SkyboxRt = "rbxassetid://5098810018"
+			sky.SkyboxUp = "rbxassetid://5098810368"
+			sky.MoonTextureId = "rbxassetid://11757639970"
+			sky.SunTextureId = "rbxassetid://16018458031"
+		elseif mapName == "Training" then --SNOWY
+			sky.SkyboxBk = "rbxassetid://626726147"
+			sky.SkyboxDn = "rbxassetid://626725926"
+			sky.SkyboxFt = "rbxassetid://626726245"
+			sky.SkyboxLf = "rbxassetid://626725738"
+			sky.SkyboxRt = "rbxassetid://626726029"
+			sky.SkyboxUp = "rbxassetid://626726994"
+			sky.MoonTextureId = "rbxassetid://11757639970"
+			sky.SunTextureId = "rbxassetid://16018458031"
+		elseif mapName == "Cranehold" then --SNOWY
+			sky.SkyboxBk = "rbxassetid://626726147"
+			sky.SkyboxDn = "rbxassetid://626725926"
+			sky.SkyboxFt = "rbxassetid://626726245"
+			sky.SkyboxLf = "rbxassetid://626725738"
+			sky.SkyboxRt = "rbxassetid://626726029"
+			sky.SkyboxUp = "rbxassetid://626726994"
+			sky.MoonTextureId = "rbxassetid://11757639970"
+			sky.SunTextureId = "rbxassetid://16018458031"
+		elseif mapName == "Shipment" then
+			sky.SkyboxBk = "rbxassetid://5674406298"
+			sky.SkyboxDn = "rbxassetid://5674405985"
+			sky.SkyboxFt = "rbxassetid://5674406449"
+			sky.SkyboxLf = "rbxassetid://5674406184"
+			sky.SkyboxRt = "rbxassetid://5674406378"
+			sky.SkyboxUp = "rbxassetid://5674406072"
+			sky.MoonTextureId = "rbxassetid://11757639970"
+			sky.SunTextureId = "rbxassetid://16018458031"
+		end
+	end
+
+	applyWeather = function(mapName)
+		local raining = game.ReplicatedStorage.ServerSettings:FindFirstChild("Raining")
+
+		if not raining then return end
+
+		if mapName == "Shipment" then
+			raining.Value = false
+		else
+			raining.Value = false
+			
+		end
+	end
+
+	applyAmbience = function(mapName)
+		local sound = light:FindFirstChild("MW_Ambience")
+
+		if not sound then
+			sound = Instance.new("Sound")
+			sound.Name = "MW_Ambience"
+			sound.Looped = true
+			sound.Volume = 0.2
+			sound.Parent = light
+		end
+
+		if mapName == "Shipment" then
+			sound.SoundId = "rbxassetid://12856283909" --+ industrial noise
+		elseif mapName == "Cranehold" then
+			sound.SoundId = "rbxassetid://110980912400662" --+ wind
+		elseif mapName == "Snowline" then
+			sound.SoundId = "rbxassetid://5799870105" --+ indoor hum
+		elseif mapName == "Training" then
+			sound.SoundId = "rbxassetid://336392497" --+ indoor hum
+		elseif mapName == "Killhouse" then
+			sound.SoundId = "rbxassetid://137488637418162" --+ indoor hum
+		elseif mapName == "Sphere" then
+			sound.SoundId = "rbxassetid://83114614357417" --+ PS2 Ambience
+			sound.Volume = 0.5
+		else
+			sound.SoundId = "rbxassetid://9112874053" --+ generic outdoor
+		end
+
+		if not sound.IsPlaying then
+			sound:Play()
+		end
+	end
+
+	local function normalizeMapName(name)
+		if not name then return nil end
+		--+ strip leading underscore, trailing year, and spaces
+		name = name:gsub("^_", "")      --+ "_SHIPMENT 2022" > "SHIPMENT 2022"
+		name = name:gsub("%s%d+$", "")  --+ "SHIPMENT 2022" > "SHIPMENT"
+		name = name:gsub("%s+", "")     --+ "Shoot House" > "ShootHouse"
+		return name:lower()
+	end
+
+	local function resolveLightKey(mname)
+		if not mname then
+			return "Shipment" --+ safe fallback
+		end
+
+		local target = normalizeMapName(mname)
+
+		--+ direct key match
+		for key, _ in pairs(lightset) do
+			if normalizeMapName(key) == target then
+				return key
+			end
+		end
+
+		--+ match against cfg.Name
+		for key, cfg in pairs(lightset) do
+			if cfg.Name and normalizeMapName(cfg.Name) == target then
+				return key
+			end
+		end
+
+		--+ hard fallback
+		return "Shipment"
+	end
+
+	local function startmatch(mname,mode)
+		local modedata,interval,scoretype
+		currentmode				=mode
+		modedata				=gamelist[currentmode]
+		scoretype				=modedata.Scoretype
+		roundtime				=modedata.Length
+		endscore				=modedata.Endscore
+		gamemode.Value			=modedata.Name
+		interval				=modedata.Interval
+		point					=modedata.Point
+		maxscoredis.Value		=modedata.Startscore>0 and modedata.Startscore or endscore
+		
+		refresh()
+
+		pscore.Value			=modedata.Startscore
+		gscore.Value			=modedata.Startscore
+
+		local lightKey = resolveLightKey(mname)
+		applyLighting(lightKey)
+		local map				=new("Model",workspace)
+		local chunks			=game.ServerStorage.Maps[mname]:GetChildren()
+		local chunkpart			=0
+		map.Name				="Map"
+		mapname.Value = mname
+
+		for i=1,#chunks do
+			chunkpart=chunkpart+1
+			if chunkpart%100==0 then
+				wait(0)
+			end
+			if chunks[i]:IsA("Model") then
+				local pt=chunks[i]:GetChildren()
+				for x=1,#pt do
+					chunkpart=chunkpart+1
+					if chunkpart%50==0 then
+						wait(0)
+					end
+				end
+			end
+			local clone = chunks[i]:Clone()
+			clone.Parent = map
+		end
+			
+			
+			
+		local agmp=wfc(map,"AGMP")
+		if currentmode=="tdm" then
+			if agmp then
+				agmp:Destroy()
+			end
+		elseif currentmode=="dom" then
+			if not agmp then return end
+			local stuff=agmp:GetChildren()
+			for i=1,#stuff do
+				local v=stuff[i]
+				if v.Name=="DomPos" then
+					local flag=domflag:Clone()
+					flag.Letter.Value=	i==1 and "A" or i==2 and "B" or i==3 and "C"
+					flag.Parent=agmp
+					flag:SetPrimaryPartCFrame(v.CFrame)
+					flag.Script.Disabled=false
+				end
+				v:Destroy()
+			end
+		elseif currentmode=="koth" then
+			if not agmp then return end
+			local stuff=agmp:GetChildren()
+			for i=1,#stuff do
+				local v=stuff[i]
+				if v.Name=="KingPos" then
+					local flag=random(1,2)==1 and kingflag:Clone() or kingflag2:Clone()
+					flag.Name="KingFlag"
+					flag.Parent=agmp
+					flag:SetPrimaryPartCFrame(v.CFrame)
+					flag.Script.Disabled=false
+				end
+				v:Destroy()
+			end
+		end
+
+		if teston then
+			for i,v in next,map.Teleport:GetChildren() do
+				v.CFrame=map.Teleport.B1.CFrame
+			end
+		end
+		
+		local currentGamemode = gamemode.Value
+		local currentMapName = mapname.Value
+
+		if currentMapName == "Ravod 911 Revamp" then
+			game.Workspace.Gravity = 100
+		elseif mapname.Value == "MoonTest" then
+			game.Workspace.Gravity = 160
+		elseif mapname.Value == "gungage Map" then
+			game.Workspace.Gravity = 180
+		else
+			game.Workspace.Gravity = 170
+		end
+		
+		wait(0)
+		allowspawn.Value=true
+		countdown.Value=true
+		for i=15,0,-1 do
+			timer.Value=i
+			task.wait(1)
+		end
+		countdown.Value=false
+		gamerunning=true
+		for i = roundtime * 60, 0, -1 do
+			if gamerunning then
+				timer.Value=i
+				checkresult(scoretype)
+				if interval and i%interval==0 then
+					intervalcheck(point,i)
+				end
+				if i%300==0 and i<roundtime*60 and i>60 then
+					checkteambalance()
+				end
+				task.wait(1)
+			end
+		end
+		
+		gamerunning=false
+		allowspawn.Value=false
+		gameresult(scoretype)
+		balanceteam(true)
+		game.ReplicatedStorage.ServerSettings.Raining.Value = false
+		respawnall()
+		network:bounce("emptytrash")
+	end
+
+	--+	individualized round score checking
+
+		local function domcheck()
+		local map					=ffc(workspace,"Map")
+		if map then
+			local propfolder		=ffc(map,"AGMP")
+			if propfolder then
+
+				local props			=propfolder:GetChildren()
+				local ppl			=game.Players:GetChildren()
+				
+
+				for i=1,#props do			--+ get each flag
+					local base				=ffc(props[i],"Base")
+					local tm				=ffc(props[i],"TeamColor")
+					local cp				=ffc(props[i],"CapPoint")
+					local iscapping			=ffc(props[i],"IsCapping")
+					local intervalcap		=cp.Value>0 and cp.Value%15==0
+					local add				=0
+					local conflict
+					local presentteam
+					
+					iscapping.Value=false	
+					for x=1,#ppl do					--+ get all players and check distance from this flag
+						local char					=ppl[x].Character
+						if char then
+							local root				=ffc(char,"HumanoidRootPart")
+							if root then
+								if (root.Position-base.Position).Magnitude<15 and root.Position.Y>base.Position.Y then
+									if tm.Value~=ppl[x].TeamColor and (not presentteam or presentteam==ppl[x].TeamColor) then
+										presentteam=ppl[x].TeamColor
+										iscapping.Value=true
+										add=add+1
+										if intervalcap then
+											local db=ffc(ppl[x],"Capping")
+											if not db then db=new("IntValue",ppl[x]) end
+											if db.Value<3 then
+												playerstates.addscore(ppl[x],"domcapping",15) --+ 40 old xp
+												db.Name="Capping"
+												db.Value=db.Value+1
+												debris:AddItem(db,40)
+											end
+										else
+											intervalcap=cp.Value>0 and cp.Value%15==0
+										end
+									else
+										add=0
+										conflict=true
+										if tm.Value==ppl[x].TeamColor then
+											if cp.Value>0 then
+												playerstates.addscore(ppl[x],"domdefend",100) --+ 150 old xp
+											end
+										end
+										cp.Value=0
+									end
+								end
+							end
+						end
+					end
+					if not conflict then
+						if add>3 then add=3 end
+						cp.Value=cp.Value+add
+					end
+					if not conflict and iscapping.Value and cp.Value>=50 then	 		--+ checking for completed capture with no conflict
+						if presentteam and presentteam~=tm.Value then					--+ flag captured
+							tm.Value=presentteam
+							cp.Value=0
+							--+ reward points
+							for i=1,#ppl do
+								local v=ppl[i]
+								if v.TeamColor==presentteam then
+									local char=v.Character
+									if char then
+										local root=ffc(char,"HumanoidRootPart")
+										if root then
+											if (root.Position-base.Position).magnitude<15 and root.Position.Y>base.Position.Y then
+												playerstates.addscore(v,"domcap",150) --+ 350 old xp
+											end
+										end
+									end
+								end
+							end
+						else
+							cp.Value=0
+						end
+					elseif not iscapping.Value then
+						cp.Value=0	
+					end
+				end
+			end
+		end
+	end
+
+	local function kingcheck()
+		local map					=ffc(workspace,"Map")
+		if map then
+			local propfolder		=ffc(map,"AGMP")
+			if propfolder then
+
+				local prop			=propfolder:GetChildren()[1]
+				local ppl			=game.Players:GetChildren()
+
+				--+ get one flag
+				local base				=ffc(prop,"Base")
+				local tm				=ffc(prop,"TeamColor")
+				local cp				=ffc(prop,"CapPoint")
+				local iscapping			=ffc(prop,"IsCapping")
+				local intervalcap		=cp.Value>0 and cp.Value%15==0
+				local add				=0
+				local conflict
+				local presentteam
+				
+				iscapping.Value=false	
+				for x=1,#ppl do					--+ get all players and check distance from this flag
+					local char					=ppl[x].Character
+					if char then
+						local root				=ffc(char,"HumanoidRootPart")
+						if root then
+							if (root.Position-base.Position).Magnitude<20 and root.Position.Y>base.Position.Y then
+								if tm.Value~=ppl[x].TeamColor and (not presentteam or presentteam==ppl[x].TeamColor) then
+									presentteam=ppl[x].TeamColor
+									iscapping.Value=true
+									add=add+1
+									if intervalcap then
+										local db=ffc(ppl[x],"Capping")
+										if not db then db=new("IntValue",ppl[x]) end
+										if db.Value<3 then
+											playerstates.addscore(ppl[x],"kingcapping",20) --+ 75 is the old xp
+											db.Name="Capping"
+											db.Value=db.Value+1
+											debris:AddItem(db,40)
+										end
+									else
+										intervalcap=cp.Value>0 and cp.Value%15==0
+									end
+								else
+									add=0
+									conflict=true
+									if tm.Value==ppl[x].TeamColor then
+										if cp.Value>0 then
+											playerstates.addscore(ppl[x],"kingdefend",150) --+ 150 old xp
+										end
+									end
+									cp.Value=0
+								end
+							end
+						end
+					end
+				end
+				if not conflict then
+					if add>3 then add=3 end
+					cp.Value=cp.Value+add
+				end
+				if not conflict and iscapping.Value and cp.Value>=50 then	 		--+ checking for completed capture with no conflict
+					if presentteam and presentteam~=tm.Value then					--+ flag captured
+						tm.Value=presentteam
+						cp.Value=0
+						--+ reward points
+						for i=1,#ppl do
+							local v=ppl[i]
+							if v.TeamColor==presentteam then
+								local char=v.Character
+								if char then
+									local root=ffc(char,"HumanoidRootPart")
+									if root then
+										if (root.Position-base.Position).magnitude<15 and root.Position.Y>base.Position.Y then
+											playerstates.addscore(v,"kingcap",200) --+ 500 is the old xp
+										end
+									end
+								end
+							end
+						end
+					else
+						cp.Value=0
+					end
+				elseif not iscapping.Value then
+					cp.Value=0	
+				end
+
+			end
+		end
+	end
+
+	--++ round system functions
+
+	function roundsystem:killupdate(victim,killer)
+
+		if currentmode=="bos"then
+			local kscore=killer.TeamColor==tnoobs and gscore or pscore
+			local vscore=victim.TeamColor==tnoobs and gscore or pscore
+			if victim.TeamColor~=tnoobs then
+			gscore.Value=gscore.Value+100
+			else
+			pscore.Value=pscore.Value+1
+			end
+	
+		end
+		if victim==killer then return end
+		local kscore=killer.TeamColor==tnoobs and gscore or pscore
+		local vscore=victim.TeamColor==tnoobs and gscore or pscore
+		if currentmode=="tdm" or currentmode=="koth" then
+			kscore.Value=kscore.Value+1
+
+		elseif currentmode=="dom" then
+			if vscore.Value>0 then
+				vscore.Value=vscore.Value-1
+			end
+		end
+	end
+
+	task.spawn(function()
+		while true do
+			if gamerunning then
+				if currentmode == "dom" then
+					domcheck()
+				elseif currentmode == "koth" then
+					kingcheck()
+				end
+			end
+			task.wait(0.1)
+		end
+	end)
+	
+	local maplist			={"Shipment"} --"Training","Highrise","Cranehold","Snowline","Killhouse","Shipment","ShootHouse"
+	
+	local removalist		={"Sphere","Plane","CSGO2","Dust2","explosions","reneob","WarHome","Office","Crane","Metro","Ravod","Suburbia","Ravod2","Construction","Ruins","Warehouse","Refinery","Crane2"}
+
+	local modelist			={"dom","koth","tdm"}
+	
+	--+ this is for testing modelist
+	--+ local modelist ={"dom","koth","tdm"}
+	
+	local r					=random(1,#maplist*#modelist)
+
+	function getmatch()
+		local smode=modelist[(r-1)%#modelist+1]
+		local smap=maplist[(r-1)%#maplist+1]
+		r=r+1
+		return smap,smode
+	end
+
+	while true do
+		local mp,gm=getmatch() --+ map and mode randomizer
+		print("|NOW ARRIVING "..mp.."    |GAMEMODE| "..gm)
+
+		pcall(function()
+			startmatch(mp,gm)
+		end)
+		task.wait(1)
+	end
+end
